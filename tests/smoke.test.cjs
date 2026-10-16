@@ -30,7 +30,7 @@ function createHarness({ enabled = false, count = 15, pathname = '/c/test-conver
     head: { appendChild: (el) => append.push(el) },
     createElement() { return {}; },
     querySelectorAll(selector) {
-      return selector === `[\${marker}]` ? turns.filter((turn) => turn.hasAttribute(marker)) : turns;
+      return selector === `[${marker}]` ? turns.filter((turn) => turn.hasAttribute(marker)) : turns;
     },
     addEventListener(name, handler) { handlers.set(name, handler); },
   };
