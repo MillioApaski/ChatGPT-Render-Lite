@@ -21,7 +21,7 @@ function createHarness({ enabled = false, count = 15, pathname = '/c/test-conver
   const append = [];
   const scheduled = { timeout: [], interval: [] };
   const handlers = new Map();
-  let menuCommand;
+  const menuCommands = [];
   let reloaded = false;
   let savedValue;
   const location = { pathname, reload() { reloaded = true; } };
@@ -40,7 +40,7 @@ function createHarness({ enabled = false, count = 15, pathname = '/c/test-conver
     CSS: { supports: () => cssSupported },
     GM_getValue: () => enabled,
     GM_setValue: (_key, value) => { savedValue = value; },
-    GM_registerMenuCommand: (_text, handler) => { menuCommand = handler; },
+    GM_registerMenuCommand: (label, handler) => { menuCommands.push({ label, handler }); },
     setTimeout: (handler) => scheduled.timeout.push(handler),
     setInterval: (handler) => scheduled.interval.push(handler),
     console: { info() {}, warn() {} },
@@ -49,7 +49,8 @@ function createHarness({ enabled = false, count = 15, pathname = '/c/test-conver
     turns, append, scheduled, handlers, location, document,
     scan() { scheduled.timeout[0](); },
     countMarked() { return turns.filter((turn) => turn.hasAttribute(marker)).length; },
-    toggle() { menuCommand(); },
+    toggle() { menuCommands.find((x) => x.label.startsWith('ChatGPT Render Lite:')).handler(); },
+    switchMode() { menuCommands.find((x) => x.label.startsWith('Render Lite 模式:')).handler(); },
     getSavedValue: () => savedValue,
     wasReloaded: () => reloaded,
   };
