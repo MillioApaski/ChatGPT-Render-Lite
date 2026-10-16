@@ -17,6 +17,8 @@ jobs:
         with:
           node-version: "22"
       - name: Syntax check
-        run: node --check chatgpt-render-lite.user.js
+        run: |
+          node --check chatgpt-render-lite.user.js
+          node --check chatgpt-geometry-cache.user.js
       - name: Unit tests
         run: node --test tests/*.test.cjs
