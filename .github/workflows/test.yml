@@ -1,0 +1,22 @@
+name: Test userscript
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: node --check chatgpt-render-lite.user.js
+      - name: Unit tests
+        run: node --test tests/*.test.cjs
