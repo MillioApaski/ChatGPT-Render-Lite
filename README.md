@@ -76,6 +76,61 @@
 
 - Node.js 基础逻辑测试与 CI：用于确认功能完整性。
 - Chrome 真机 Performance A/B：**尚待验证**，不能据此声称已修复 ChatGPT 性能瓶颈。
+## Phase 4：运行时几何读取实验（独立脚本）
+
+> [!CAUTION]
+> **高风险实验，必须手动安装和启用。默认完全关闭。**
+> `cache` 模式可能在同一个滚动事件内返回短暂过期的 `clientHeight`，影响滚动定位、浮层位置或布局。没有真实网页验证，**不推荐日常使用**。这是实验性局部 DOM getter 补丁，不是对 ChatGPT `reconcileViewport` 私有函数的直接修改。
+
+该阶段为独立、可卸载的伴随脚本，**不更改 v0.3 经典模式 / Viewport Guard 代码**：
+
+[安装 Phase 4 Geometry Cache](https://raw.githubusercontent.com/MillioApaski/ChatGPT-Render-Lite/main/chatgpt-geometry-cache.user.js)
+
+主世界运行机制使用 `@grant none`、`@sandbox raw` 与 `@run-at document-start`。如 Tampermonkey 因 CSP 或注入环境限制未成功补丁，不要假定已经生效，需检查状态中的 `patchedTargets`。
+
+### 三种运行模式
+
+- `off`（默认）：不安装事件监听器、不修改 getter。
+- `observe`：仅在真正发生滚动、且滚动容器包含聊天消息时，为**最多两个滚动元素自身**添加 `clientHeight` 测量包装，不缓存返回值。
+- `cache`：在 observe 基础上，对**同一滚动事件序号中 8ms 内**的重复读取短期复用结果，每次原生读取最多复用两次；后续滚动事件会清空缓存资格。
+
+**不会**修改 `Element.prototype` 或 `HTMLElement.prototype`，也不会拦截所有滚动事件或网络请求。不过局部 getter 的返回值仍可能暂时变旧，不能视为无风险。
+
+### 操作（DevTools Console）
+
+安装伴随脚本后，在 ChatGPT 页面 F12 → Console：
+
+```javascript
+// 1. 观察模式：先确认它实际识别了滚动容器
+ChatGPTRenderLitePhase4.setMode('observe');
+
+// 2. 滚动后查看数据
+ChatGPTRenderLitePhase4.status();
+
+// 3. 仅在 observe 有真实命中时，尝试缓存实验
+ChatGPTRenderLitePhase4.setMode('cache');
+
+// 4. 恢复原始行为（保存 off 并刷新）
+ChatGPTRenderLitePhase4.setMode('off');
+
+// 紧急停止当前页面的运行时补丁（不更改下次打开的模式）
+ChatGPTRenderLitePhase4.restore();
+```
+
+`setMode` 会保存所选模式并立即刷新当前页面，模式仅保存到该站点本地存储。禁用或卸载本脚本前，建议先将模式设置为 `off`，以免将来重新安装时意外恢复缓存模式。
+
+### 判断是否命中目标
+
+在 `status()` 里重点看：
+
+- `patchedTargets`：0 表示没有对任何滚动元素安装局部 getter，**不能宣称已优化**。
+- `nativeReads`：包装命中的原生高度读取次数。
+- `cacheHits`：缓存实际复用次数。若为 0，缓存模式没有直接节省此路径的原生读取。
+- `maxNativeReadMs`：单次原生 getter 包含测量开销的最大耗时，仅作线索，非精确 CPU 采样。
+
+请按 **off → observe → cache** 做三组交互对照，每组至少三次，并同步导出 Performance trace 观察 `scroll → reconcileViewport → clientHeight` 是否真的缩短。历史 Trace 没有证明那个 `clientHeight` 就是本实验识别的滚动容器，所以命中率可能是 0。
+
+
 ## 开发
 
 无需构建工具或外部运行时依赖，用户脚本入口：[`chatgpt-render-lite.user.js`](./chatgpt-render-lite.user.js)。
