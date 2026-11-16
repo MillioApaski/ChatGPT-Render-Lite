@@ -393,7 +393,7 @@ const css = [
  '.bar{flex:0 0 auto;background:#e8f3ef;border-bottom:1px solid #c9d7d1;padding:8px 12px;display:flex;align-items:center;gap:10px}',
  '.bar strong{flex:1;font-size:12px}.bar span{color:#607b70;font-size:11px}',
  '.bar button{font:inherit;padding:5px 9px;border:1px solid #9cbfb2;border-radius:8px;background:#fff;cursor:pointer;color:#215446}',
- '.scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}',
+ '.scroll{flex:1;min-height:0;overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scrollbar-gutter:stable}',
  '.timeline-spacer{height:0;pointer-events:none}.timeline-rows{width:100%}',
  '.turn{padding:13px 17px 17px;border-bottom:1px solid #e2e8e8;overflow-wrap:anywhere}',
  '.turn--user{background:#f3f7f6}.turn-header{display:flex;gap:14px;margin-bottom:9px;font-size:11px;color:#527b6e}',
@@ -498,6 +498,7 @@ function start(mode='preview'){
   state.source=source;state.view=view;state.host=host;state.mode=mode;state.path=location.pathname;
   layout();view.setMessages(messages,{toBottom:true});
   requestAnimationFrame(()=>{if(state.view===view&&state.mode!=='off'){view.scroller.scrollTop=view.scroller.scrollHeight;view.render();}});
+  setTimeout(()=>{if(state.view===view&&state.mode!=='off'){view.scroller.scrollTop=view.scroller.scrollHeight;view.render();}},80);
   if(mode==='takeover') {
     state.previous={value:source.root.style.getPropertyValue('display'),priority:source.root.style.getPropertyPriority('display')};
     source.root.style.setProperty('display','none','important');
