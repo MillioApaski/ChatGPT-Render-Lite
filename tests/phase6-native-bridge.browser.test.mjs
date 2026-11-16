@@ -108,6 +108,33 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     await client.run("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
     assert.equal(await client.run('ChatGPTRenderLiteBridge.status().mode'),'off');
+    // Regression from real-page v0.2.0 diagnostic: a root with just two
+    // styled branches is not a reliable chat message container.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      root.replaceChildren();
+      for(let i=0;i<2;i++){
+        const region=document.createElement('div');
+        const prose=document.createElement('div');
+        prose.className='prose';prose.textContent='布局区域 '+i;
+        region.append(prose);root.append(region);
+      }
+    })()`);
+    const falsePositive=await client.run('ChatGPTRenderLiteBridge.probe()');
+    assert.equal(falsePositive.counts['[data-testid^="conversation-turn-"]'],0);
+    assert.equal(falsePositive.containers[0].candidate,null);
+    const structure=await client.run('ChatGPTRenderLiteBridge.structure()');
+    assert.equal(structure.version,'0.3.0');
+    assert.ok(structure.reports.length>0);
+    assert.ok(structure.reports[0].branches.some(b=>b.childCount===2));
+    assert.ok(!JSON.stringify(structure).includes('布局区域'), 'report must not return text');
+    await assert.rejects(
+      client.run("ChatGPTRenderLiteBridge.start('takeover')"),
+      /找不到安全的消息区域|至少需要 5 个/
+    );
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
+    assert.equal(await client.run("document.querySelector('[data-rl-native-bridge]')===null"),true);
+
     // Regression: newer ChatGPT markup may use no legacy test IDs, role
     // attributes or article tags. Detect repeated div rows via prose bodies.
     await client.run(`(() => {
