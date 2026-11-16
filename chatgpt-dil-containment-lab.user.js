@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Render Lite - DIL Block Containment Lab (Phase 6.3)
 // @namespace    https://github.com/MillioApaski/ChatGPT-Render-Lite
-// @version      0.1.0
+// @version      0.1.1
 // @description  Default-off, reversible content-visibility A/B experiment on measured offscreen DIL blocks.
 // @match        https://chatgpt.com/*
 // @noframes
@@ -37,7 +37,7 @@
   // Inactive installation adds no scroll listeners, DOM observers or timers.
   function status() {
     return Object.freeze({
-      version: '0.1.0', active: state.active, pending: state.pending, appliedBlocks: state.originals.size,
+      version: '0.1.1', active: state.active, pending: state.pending, appliedBlocks: state.originals.size,
       lastReason: state.lastReason, lastAttempt: state.lastAttempt,
       beforeHeight: state.beforeHeight, afterHeight: state.afterHeight,
       warning: 'Opt-in CSS experiment; no getBoundingClientRect monkeypatch or network calls.'
@@ -110,8 +110,11 @@
     if(state.active||state.pending) throw Error('实验已开启或正在准备，先执行 disable()');
     state.pending=true;
     const token=++state.token;
-    try{return await prepareAndEnable(token);}
+    try{await prepareAndEnable(token);}
     finally{if(state.token===token)state.pending=false;}
+    // Read the final state only AFTER pending is reset. Previously the async
+    // helper captured a snapshot with active:true and pending:true.
+    return status();
   }
   async function prepareAndEnable(token){
     if(!isConversation()) throw Error('只允许在 ChatGPT 对话页启用');
