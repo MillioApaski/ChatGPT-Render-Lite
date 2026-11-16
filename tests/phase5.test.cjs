@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'chatgpt-phase5-diagnostics.user.js'), 'utf8');
 
-function boot() {
+function boot(selectorCounts = {}) {
   const menus = new Map();
   const instances = [];
   let createdBlob = null;
@@ -36,7 +36,7 @@ function boot() {
       remove() {},
     }),
     documentElement: { appendChild() {} },
-    querySelectorAll: () => Array.from({ length: 25 }),
+    querySelectorAll: (selector) => Array.from({ length: selectorCounts[selector] || 0 }),
     getElementsByTagName: () => Array.from({ length: 100 }),
     visibilityState: 'visible',
   };
@@ -93,6 +93,10 @@ test('captures thresholded events and redacts script identifiers without patchin
   assert.equal(data.summary.totalLoafCount, 1);
   assert.equal(data.summary.totalLongTaskCount, 1);
   assert.equal(data.summary.totalThresholdedEventCount, 1);
+  assert.equal(data.summary.retainedEventsWithInteractionId, 1);
+  assert.equal(data.summary.distinctEventStartTimestamps, 1);
+  assert.equal(data.recording.startSnapshot.turns, null);
+  assert.equal(data.recording.startSnapshot.matchedSelector, null);
   assert.equal(data.recording.events[0].inputDelayMs, 16);
   assert.equal(data.recording.events[0].processingMs, 70);
   assert.equal(data.recording.events[0].presentationDelayMs, 44);
@@ -109,4 +113,29 @@ test('repeated start while already recording does not register duplicate observe
   start();
   start();
   assert.equal(env.instances.length, 3);
+});
+
+test('falls back to a second candidate selector without collecting message content', async () => {
+  const env = boot({ '[data-message-author-role]': 7 });
+  env.menus.get('Phase 5：开始采样')();
+  env.menus.get('Phase 5：导出 JSON 报告')();
+  const data = JSON.parse(await env.getBlob().text());
+  assert.equal(data.recording.startSnapshot.turns, 7);
+  assert.equal(data.recording.startSnapshot.matchedSelector, 'authorRole');
+  assert.equal(data.recording.startSnapshot.selectorCounts.testId, 0);
+  assert.equal(data.recording.startSnapshot.selectorCounts.authorRole, 7);
+});
+test('pointer transitions are reported separately from real interactions', async () => {
+  const env = boot();
+  env.menus.get('Phase 5：开始采样')();
+  env.instances.find((x) => x.type === 'event').emit([
+    {startTime: 500, duration: 200, name: 'pointerenter', interactionId: 0, processingStart: 510, processingEnd: 511},
+    {startTime: 500, duration: 200, name: 'pointerleave', interactionId: 0, processingStart: 510, processingEnd: 511},
+  ]);
+  env.menus.get('Phase 5：导出 JSON 报告')();
+  const data = JSON.parse(await env.getBlob().text());
+  assert.equal(data.summary.retainedEventCount, 2);
+  assert.equal(data.summary.distinctEventStartTimestamps, 1);
+  assert.equal(data.summary.retainedEventsWithInteractionId, 0);
+  assert.equal(data.summary.retainedPointerTransitionEventEntries, 2);
 });
