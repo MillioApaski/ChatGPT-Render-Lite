@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         ChatGPT Render Lite · Native Bridge Lab
 // @namespace    https://github.com/MillioApaski/ChatGPT-Render-Lite
-// @version      0.1.0
+// @version      0.2.0
 // @description  Opt-in original ChatGPT page renderer bridge experiment. Restores native UI on failure.
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/MillioApaski/ChatGPT-Render-Lite/feature/phase6-native-render-bridge/chatgpt-native-render-bridge.user.js
+// @downloadURL  https://raw.githubusercontent.com/MillioApaski/ChatGPT-Render-Lite/feature/phase6-native-render-bridge/chatgpt-native-render-bridge.user.js
 // @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // ==/UserScript==
@@ -342,13 +344,83 @@ const selectors = [
   'main article',
   'main [role="article"]'
 ];
-const state = {mode:'off',selector:null,source:null,host:null,view:null,observer:null,timer:null,watch:null,resize:null,previous:null,path:null,lastError:null};
+const state = {mode:'off',selector:null,source:null,host:null,view:null,observer:null,timer:null,watch:null,resize:null,previous:null,path:null,lastError:null,manualRoot:null,manualPath:null,picker:null};
 const err = e => e instanceof Error ? e.message : String(e);
 const conversationRoute = () => /^\/(?:c|g)\//.test(location.pathname);
 const bridgeElement = (name,text) => {const e=document.createElement(name);if(text!==undefined)e.textContent=String(text);return e;};
+const contentSelectors=['.markdown','.prose','[class*="markdown"]','[class*="prose"]','[class*="text-message"]','[class*="message-content"]','[class*="whitespace-pre-wrap"]'];
+const composerSelector='form,textarea,[contenteditable="true"],[role="textbox"]';
+const findMain=e=>e?.closest?.('main,[role="main"]');
 function nodesFor(selector) {
-  const all=[...document.querySelectorAll(selector)].filter(e=>e instanceof HTMLElement && e.closest('main'));
+  const all=[...document.querySelectorAll(selector)].filter(e=>e instanceof HTMLElement&&findMain(e)&&!e.closest('[data-rl-native-bridge]'));
   return all.filter(e=>!all.some(p=>p!==e && p.contains(e)));
+}
+function safeRoot(root,main) {
+  return Boolean(root&&main&&main.contains(root)&&root!==main&&root!==document.body&&root!==document.documentElement&&
+    !root.matches(composerSelector)&&!root.querySelector(composerSelector));
+}
+function sourceFromRoot(root,label='structure'){
+  const main=findMain(root);
+  if(!safeRoot(root,main))throw Error('推断的消息区域包含输入框或越过了 main 边界');
+  const getNodes=()=>[...root.children].filter(e=>e instanceof HTMLElement&&e.textContent?.trim());
+  const nodes=getNodes();
+  if(nodes.length<2||nodes.length>OPTIONS.maxTurns)throw Error('推断的消息数量不在安全范围');
+  return {selector:label,nodes,root,main,composer:main.querySelector(composerSelector),getNodes};
+}
+// DOM-structure inference does not rely on version-specific message attributes.
+function structuralCandidates(main,onlyContaining=null){
+  const found=new Set();
+  for(const selector of contentSelectors){
+    for(const item of main.querySelectorAll(selector)){
+      if(found.size>=1800)break;
+      if(item instanceof HTMLElement&&!item.closest('[data-rl-native-bridge]')&&!item.closest(composerSelector)&&item.textContent?.trim())found.add(item);
+    }
+  }
+  const anchors=[...found].filter(e=>![...found].some(p=>p!==e&&p.contains(e)));
+  const groups=new Map();
+  for(const anchor of anchors){
+    let child=anchor;
+    for(let depth=0;depth<20&&child.parentElement;depth++){
+      const root=child.parentElement;
+      if(root===main)break;
+      if(!groups.has(root))groups.set(root,new Set());
+      groups.get(root).add(child);
+      child=root;
+    }
+  }
+  const result=[];
+  for(const [root,branches] of groups){
+    if(!safeRoot(root,main)||onlyContaining&&!root.contains(onlyContaining))continue;
+    const all=[...root.children].filter(e=>e instanceof HTMLElement&&e.textContent?.trim());
+    if(all.length<2||all.length>OPTIONS.maxTurns||branches.size<2)continue;
+    const hits=all.filter(e=>branches.has(e)).length;
+    if(hits<2||hits/all.length<0.25)continue;
+    result.push({root,count:all.length,hits,score:hits*2+10*hits/all.length+Math.min(all.length,100)/10});
+  }
+  result.sort((a,b)=>b.score-a.score);
+  return result.slice(0,8);
+}
+function manualCandidate(target){
+  const main=findMain(target);
+  if(!main||target.closest('[data-rl-native-bridge]'))throw Error('请点击真正的聊天消息');
+  const inferred=structuralCandidates(main,target);
+  if(inferred.length)return inferred[0].root;
+  let current=target;
+  const candidates=[];
+  for(let depth=0;depth<22&&current?.parentElement;depth++,current=current.parentElement){
+    const root=current.parentElement;
+    if(root===main)break;
+    if(!safeRoot(root,main))continue;
+    const nodes=[...root.children].filter(e=>e instanceof HTMLElement&&e.textContent?.trim());
+    if(nodes.length<3||nodes.length>OPTIONS.maxTurns)continue;
+    const similar=nodes.filter(e=>e.localName===current.localName).length;
+    const substantial=nodes.filter(e=>e.textContent.trim().length>=8).length;
+    if(similar/nodes.length<.7||substantial/nodes.length<.7)continue;
+    candidates.push({root,score:nodes.length+similar});
+  }
+  candidates.sort((a,b)=>b.score-a.score);
+  if(!candidates.length)throw Error('未找到安全的重复消息容器。请使用自定义 CSS 选择器');
+  return candidates[0].root;
 }
 function commonParent(nodes) {
   for(let a=nodes[0];a;a=a.parentElement) if(nodes.every(n=>a.contains(n)))return a;
@@ -357,22 +429,27 @@ function commonParent(nodes) {
 function selectSource(selector) {
   const nodes=nodesFor(selector);
   if(nodes.length<2||nodes.length>OPTIONS.maxTurns)throw Error('需要同一个区域的 2～1200 条消息');
-  const main=nodes[0].closest('main');
-  if(!main||nodes.some(n=>n.closest('main')!==main))throw Error('消息跨越多个 main');
+  const main=findMain(nodes[0]);
+  if(!main||nodes.some(n=>findMain(n)!==main))throw Error('消息跨越多个 main');
   const root=commonParent(nodes);
-  if(!root||root===main||root===document.body||root===document.documentElement)throw Error('无法隔离消息根节点');
+  if(!safeRoot(root,main))throw Error('无法隔离消息根节点');
   if(root.querySelector('form,textarea,[contenteditable="true"]'))throw Error('根节点包含输入框，已拒绝');
-  const composer=main.querySelector('textarea,form,[contenteditable="true"]');
+  const composer=main.querySelector(composerSelector);
   if(composer&&root.contains(composer))throw Error('消息根节点包含输入框');
-  return {selector,nodes,root,main,composer};
+  return {selector,nodes,root,main,composer,getNodes:()=>nodesFor(selector)};
 }
 function discover() {
   if(state.selector)return selectSource(state.selector);
+  if(state.manualRoot?.isConnected&&state.manualPath===location.pathname)return sourceFromRoot(state.manualRoot,'picked');
   for(const selector of selectors)try{return selectSource(selector);}catch {}
-  throw Error('找不到安全的消息区域。可通过 setSelector("CSS") 指定每条消息。');
+  for(const main of document.querySelectorAll('main,[role="main"]')){
+    const guessed=structuralCandidates(main);
+    if(guessed.length)return sourceFromRoot(guessed[0].root,'inferred');
+  }
+  throw Error('找不到安全的消息区域。请点击消息选择容器，或使用自定义 CSS 选择器。');
 }
 function snapshot(source) {
-  const nodes=nodesFor(source.selector);
+  const nodes=source.getNodes();
   if(nodes.length<2||nodes.length>OPTIONS.maxTurns||nodes.some(n=>!source.root.contains(n)))throw Error('消息根节点改变，自动恢复');
   let chars=0;
   const messages=nodes.map((node,i)=>{
@@ -419,6 +496,7 @@ function stopListeners(){
   if(state.timer)clearTimeout(state.timer);
   if(state.watch)clearInterval(state.watch);
   if(state.resize)window.removeEventListener('resize',state.resize);
+  stopPicker();
   window.removeEventListener('keydown',keyboard,true);
   state.observer=null;state.timer=null;state.watch=null;state.resize=null;
 }
@@ -438,7 +516,7 @@ function keyboard(e){if(e.key==='Escape')restore();}
 function verify(){
   if(state.mode==='off')return false;
   if(location.pathname!==state.path||!conversationRoute()||!state.source.root.isConnected||
-    !state.source.main.isConnected||state.source.root.querySelector('form,textarea,[contenteditable="true"]')||
+    !state.source.main.isConnected||state.source.root.querySelector(composerSelector)||
     (state.source.composer&&!state.source.composer.isConnected)){
     state.lastError='路由或 DOM 边界发生变化，已恢复原版';restore();return false;
   }
@@ -510,7 +588,7 @@ function start(mode='preview'){
   window.addEventListener('keydown',keyboard,true);
   return status();
 }
-function status(){return {version:'0.1.0',mode:state.mode,selector:state.source?.selector||state.selector||'auto',
+function status(){return {version:'0.2.0',mode:state.mode,selector:state.source?.selector||state.selector||'auto',
  messages:state.view?.messages.length||0,mounted:state.view?.nodes.size||0,lastError:state.lastError,
  reactFiberMarker:state.source?Object.keys(state.source.nodes[0]||{}).some(k=>k.startsWith('__reactFiber$')):null};}
 function probe(){
