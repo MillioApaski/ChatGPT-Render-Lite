@@ -256,6 +256,51 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     assert.ok(afterProbe.calls>=2);
     assert.ok(afterProbe.scrollend>=1);
     assert.ok(afterProbe.groupCount>=1);
+    // Phase 6.3: containment is fully default-off, checks scroll stability,
+    // changes only offscreen text blocks, and restores styles immediately.
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+    const containmentSource=await readFile(new URL('../chatgpt-dil-containment-lab.user.js',import.meta.url),'utf8');
+    await client.run(containmentSource);
+    const inactive=await client.run("ChatGPTRenderLiteDILContainment.status()");
+    assert.equal(inactive.active,false);
+    assert.equal(inactive.appliedBlocks,0);
+    await client.run(`(() => {
+      const old=document.querySelector('#messages');
+      old.replaceChildren();
+      old.style.cssText='height:540px;overflow-y:auto';
+      old.setAttribute('data-thread-frame-scrollbar','');
+      const transcript=document.createElement('div');
+      transcript.setAttribute('data-rail-chat-transcript','');
+      const turn=document.createElement('div');
+      turn.setAttribute('data-turn-key','long-turn');
+      const response=document.createElement('div');
+      response.setAttribute('data-dil-response','');
+      for(let i=0;i<40;i++){
+        const p=document.createElement('p');
+        p.style.cssText='font:16px/1.5 sans-serif;white-space:normal;margin:10px 0';
+        p.textContent='长消息块 ' + i + '，内容足够长以进行布局测量。'.repeat(35);
+        response.append(p);
+      }
+      turn.append(response);transcript.append(turn);old.append(transcript);
+    })()`);
+    const containmentStarted=await client.run('ChatGPTRenderLiteDILContainment.enable()');
+    assert.equal(containmentStarted.active,true);
+    assert.ok(containmentStarted.appliedBlocks>=4,
+      'offscreen DIL paragraphs should be containable');
+    assert.ok(Math.abs(containmentStarted.afterHeight-containmentStarted.beforeHeight)<=
+      Math.max(80,containmentStarted.beforeHeight*.01));
+    const appliedStyleCount=await client.run(
+      "document.querySelectorAll('[data-dil-response] > p[style*=\"content-visibility\"]').length"
+    );
+    assert.ok(appliedStyleCount>=4);
+    const containmentStopped=await client.run("ChatGPTRenderLiteDILContainment.disable()");
+    assert.equal(containmentStopped.active,false);
+    assert.equal(containmentStopped.appliedBlocks,0);
+    assert.ok(containmentStopped.restored>=4);
+    assert.equal(await client.run(
+      "[...document.querySelectorAll('[data-dil-response] > p')].some(p=>p.style.contentVisibility==='auto')"
+    ),false);
+    await client.run("ChatGPTRenderLiteBridge.start('preview')");
     await client.run("history.pushState({},'','/c/new-conversation')");
     await until(()=>client.run("ChatGPTRenderLiteBridge.status().mode==='off'"),6000);
     assert.deepEqual(client.errors,[]);
