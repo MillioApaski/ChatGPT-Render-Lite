@@ -20,5 +20,6 @@ jobs:
         run: |
           node --check chatgpt-render-lite.user.js
           node --check chatgpt-geometry-cache.user.js
+          for file in phase6/*.mjs; do node --check "$file"; done
       - name: Unit tests
-        run: node --test tests/*.test.cjs
+        run: node --test tests/*.test.cjs tests/*.test.mjs
