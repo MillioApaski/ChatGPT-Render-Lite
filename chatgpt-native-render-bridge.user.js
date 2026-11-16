@@ -376,7 +376,10 @@ function structuralCandidates(main,onlyContaining=null){
       if(item instanceof HTMLElement&&!item.closest('[data-rl-native-bridge]')&&!item.closest(composerSelector)&&item.textContent?.trim())found.add(item);
     }
   }
-  const anchors=[...found].filter(e=>![...found].some(p=>p!==e&&p.contains(e)));
+  const anchors=[...found].filter(e=>{
+    for(let parent=e.parentElement;parent&&parent!==main;parent=parent.parentElement)if(found.has(parent))return false;
+    return true;
+  });
   const groups=new Map();
   for(const anchor of anchors){
     let child=anchor;
@@ -458,7 +461,7 @@ function snapshot(source) {
     const author=node.matches('[data-message-author-role]')?node:node.querySelector('[data-message-author-role]');
     const role=author?.getAttribute('data-message-author-role')||'unknown';
     const key=node.getAttribute('data-message-id')||node.getAttribute('data-turn-id')||node.getAttribute('data-testid')||String(i);
-    return {id:String(i)+':'+key,role:role==='user'?'user':'assistant',text:txt};
+    return {id:String(i)+':'+key,role:role==='user'?'user':role==='assistant'?'assistant':'unknown',text:txt};
   });
   if(chars>OPTIONS.maxChars)throw Error('镜像文本太大，已自动恢复');
   return messages;
