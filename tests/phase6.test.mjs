@@ -30,7 +30,8 @@ test('random variable height updates match a linear oracle', () => {
   assert.equal(heights.total, cumulative[n]);
   for (let j = 0; j < 120; j++) {
     const offset = Math.floor(j * cumulative[n] / 119);
-    const expected = Math.max(0, cumulative.findIndex((x) => x > offset) - 1);
+    const bounded = Math.min(offset, cumulative[n] - 0.001);
+    const expected = Math.max(0, cumulative.findIndex((x) => x > bounded) - 1);
     assert.equal(heights.indexAt(offset), Math.min(n - 1, expected));
   }
 });
@@ -167,7 +168,13 @@ class FakeNode {
 }
 
 test('rendering 10,000 messages mounts only the current virtual window', async () => {
-  const old = { document: globalThis.document, ResizeObserver: globalThis.ResizeObserver };
+  const old = {
+    document: globalThis.document, ResizeObserver: globalThis.ResizeObserver,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
+    cancelAnimationFrame: globalThis.cancelAnimationFrame,
+  };
+  globalThis.requestAnimationFrame = () => 1;
+  globalThis.cancelAnimationFrame = () => {};
   globalThis.document = {
     createElement: (tag) => new FakeNode(tag),
     createDocumentFragment: () => new FakeNode('#fragment'),
@@ -199,5 +206,7 @@ test('rendering 10,000 messages mounts only the current virtual window', async (
   } finally {
     globalThis.document = old.document;
     globalThis.ResizeObserver = old.ResizeObserver;
+    globalThis.requestAnimationFrame = old.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = old.cancelAnimationFrame;
   }
 });
