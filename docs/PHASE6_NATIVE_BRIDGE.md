@@ -12,6 +12,19 @@
 
 关闭其他 Render Lite / Phase4 脚本后，刷新 chatgpt.com，进入普通长对话。在 Tampermonkey 菜单依次尝试：
 
+### v0.3.0：根据真实页面反馈修正识别
+
+用户的 v0.2.0 `probe()` 显示：旧选择器全部为 0，`main` 含 680 个元素，`.prose` 类匹配 3 个、`whitespace-pre-wrap` 类匹配 2 个，自动猜到一个仅有 **2 行**的候选。这不能证明仅加载两条消息，更可能是误将布局容器当作消息根节点。
+
+- **自动推断少于 5 个独立正文分支/兄弟行时拒绝候选**，因此这一数据形态不会让接管继续。数字 5 是安全下限，不是声称 5 个就一定能代表真正消息。
+- 新增 **「Phase6：匿名 DOM 层级报告」**。通过 `ChatGPTRenderLiteBridge.structure()` 获取 `main` 下结构概要：路径序号、节点标签、直接子节点数量、各子标签数量、部分属性**名称**。不包含聊天文本、HTML 内容、类名、属性值、ID、URL 或 React props。
+- 新增点选结构报告：用「点击消息定位容器」点击**真正的一条历史消息正文**后，控制台会先输出 `[RL Bridge] 点选结构`，给出该位置的祖先及兄弟数。即使找不到可靠消息容器，也可以利用这份匿名信息修复识别器。
+- 在真实页面结构确认前 **只运行扫描/点选，不要执行 takeover**。页面快照里仅有 2 条候选消息时，`start('preview')` 也会拒绝，而不是错误显示两个大块。
+
+如需要反馈，将 `ChatGPTRenderLiteBridge.structure()` 的输出与 `[RL Bridge] 点选结构` 的 `chain` 粘贴回来即可。因输出不含正文，不必分享私人对话内容。
+
+
+
 1. **Phase6：扫描页面结构**，在 Console 查看候选消息选择器、正文容器命中数、main 数量和推断行数。完全只读，不输出聊天文本。
    - 老选择器全为 0 **并不代表没有消息**；新版本会继续扫描 `.markdown`、`.prose` 和消息正文类名，并尝试从重复的兄弟节点推断消息列表根。
    - 检查日志里的 `containers[0].candidate.rows`：如果有合理的消息数，先运行预览验证。
@@ -27,6 +40,7 @@ Console API：
 
 ~~~javascript
 ChatGPTRenderLiteBridge.probe()
+ChatGPTRenderLiteBridge.structure() // v0.3: 无聊天文字的层级报告
 ChatGPTRenderLiteBridge.pick() // 然后点击一条历史消息，Esc 取消
 ChatGPTRenderLiteBridge.fiberProbe()
 ChatGPTRenderLiteBridge.start('preview')
