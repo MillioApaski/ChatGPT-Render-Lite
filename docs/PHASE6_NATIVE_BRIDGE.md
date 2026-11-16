@@ -154,6 +154,61 @@ ChatGPTRenderLiteGeometryProbe.restore()      // 随时手动提前恢复
 
 如果输出显示高成本主要集中在 DIL 回复内部，可以再做**单条复杂消息的局部离屏隔离**实验；如果集中在 turn 根或滚动容器，需继续审查原生滚动锚点/测高机制。选定实验后，再在探针完全关闭的情况下采集新的 DevTools Trace 进行 A/B。
 
+## Phase 6.3：离屏 DIL 文本块隔离 A/B 实验
+
+### 本次真实几何探针结果
+
+用户 10 秒原网页测试，`getBoundingClientRect()` 共 **1,554 次**，合计原生方法耗时约 **1,057.7ms**，单次最高 **130ms**，同期 `scrollend` 为 **17 次**。主要分组：
+
+| 元素类别 / 时间窗口 | 调用次数 | 累计耗时（ms） |
+| --- | ---: | ---: |
+| `turn-root` / 200ms 窗口外 | 5 | 285.3 |
+| `scroll-host` / 200ms 窗口内 | 223 | 272.0 |
+| `inside-dil` / 窗口内 | 23 | 170.8 |
+| `inside-turn` / 窗口内 | 11 | 112.0 |
+| `inside-turn` / 窗口外 | 10 | 112.0 |
+| `dil-response-root` / 窗口外 | 13 | 98.7 |
+
+这 **285 次调用贡献了约 99.3% 的采样累计耗时**；其余多数几何查询代价很小。读到 DOMRect 时的强制布局和调用本身的时间无法单靠该探针拆开，且“滚动后 200ms”仅表示时间相关，不足以归因到某一回调。**不应直接全局缓存 `getBoundingClientRect`**，特别是原生列表已显示出动态挂载消息的行为。
+
+### 新增可回退实验
+
+独立脚本：[`chatgpt-dil-containment-lab.user.js`](../chatgpt-dil-containment-lab.user.js)。它默认关闭，不监听滚动、不创建 DOM、也不添加 CSS。仅在用户明确调用 `enable()` 后尝试：
+
+1. 在当前原生 transcript 中找到有至少 8 个直接文本块的 `[data-dil-response]`，仅考虑其直接子元素 `p`、`pre`、`blockquote`、`ul`、`ol`。
+2. 等待约 500ms，确认滚动位置没有改变，再只对 **距离实际视口至少 300px**、已测量高度至少 36px、没有交互式子元素且未处于焦点内的文本块设置 `content-visibility:auto` 和 `contain-intrinsic-block-size:auto <测得高度>px`。
+3. 绝不修改 `[data-turn-key]`、`[data-rail-chat-transcript]`、滚动容器或主输入框；无论嵌套层次怎样都不对它们做 display:none。
+4. 启用后立即核对 scrollHeight：绝对变化超过 80px 或相对变化超过 1%（取更宽容的阈值）就撤销。检测到被修改块内容更新、原消息卸载、切换路由、标签页隐藏或关闭，也会回退。
+5. 只在当前挂载的消息片段中工作；不尝试保持跨会话的自定义列表。
+
+Chrome/MDN 明确指出 `content-visibility:auto` 配合 `contain-intrinsic-size` 能跳过离屏内部布局，但占位尺寸不合适时会导致滚动跳动，因此实测回退校验和可一键关闭是必需的：
+
+- <https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/content-visibility>
+- <https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/contain-intrinsic-block-size>
+
+### 使用与对照
+
+1. **关闭旧 Render Lite 优化、Phase 4 Geometry Cache 和 Phase 6.2 Geometry Probe**；保持 v0.4.0 Bridge 为 off。打开同一条长对话。
+2. **关闭本实验**时，在 DevTools Performance 录制 10–15 秒向上/向下滚动，重复至少 3 次；记录 `scrollend`、`getBoundingClientRect`、Style/Layout、Long Tasks。
+3. 安装新脚本并刷新页面。滚动到一条有大量段落的历史回复中间，停止滚动，然后执行：
+
+```js
+await ChatGPTRenderLiteDILContainment.enable()
+ChatGPTRenderLiteDILContainment.status()
+```
+
+启用结果应显示 `active:true` 和 `appliedBlocks>=4`。如果报告 `not-enough-measured-offscreen-blocks`，说明这次没有足够符合条件的离屏复杂块，没有应用优化，**不能拿来作为 B 组**。
+4. 保持启用状态，正常滚动并录制同样的 Performance Trace，重复 3 次。实验可能因原生列表换页或内容更新而自动关闭，记录 `lastReason`。如果关闭或滚动跳动，该轮 B 组不应宣称有效。
+5. 手动恢复：
+
+```js
+ChatGPTRenderLiteDILContainment.disable()
+```
+
+**验收标准**：相似的滚动路径下，B 组的总 Style/Layout、长任务和明显卡顿比 A 组持续下降，并且没有造成滚动跳跃、搜索失效、引用与代码块交互破坏。测试期间发现交互异常，立即关闭并停止该方案。内容少、频繁流式更新或浏览器本身已经充分优化的页面，隔离可能**没有收益甚至更慢**。
+
+此实验使用原有网页与 Plus 登录，不拦截请求、不替换 React、不缓存几何结果，也不是自动的最终优化。
+
 ## 保护措施
 
 - **默认关闭**，不监听页面 Mutation，也不自动扫描消息。
