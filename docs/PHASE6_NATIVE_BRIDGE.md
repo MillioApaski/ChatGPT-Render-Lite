@@ -127,6 +127,33 @@ await ChatGPTRenderLiteBridge.monitorTurns(12000) // 执行后在 12 秒内手�
 
 目前 PR #5 保留为**原版 DIL 结构的诊断与预览实验**，原生 DIL 页的 takeover 被明确阻止。不能宣称“已经替换 React 渲染器”或“已经修复卡顿”。
 
+## Phase 6.2：`getBoundingClientRect` 接收对象诊断（独立脚本）
+
+已有的 Phase 5 DevTools Trace 指向了 `scrollend → getBoundingClientRect → UpdateLayoutTree / Layout`，但 **Trace 缺少读取该几何数据时的具体 DOM 元素**。目标分类未确定前，不能直接在原生原型或某个全局事件上加缓存/拦截。
+
+新的单独测试脚本：[`chatgpt-geometry-target-probe.user.js`](../chatgpt-geometry-target-probe.user.js)。
+
+它**不自动工作**；必须先在 Console 主动开启测试。建议暂停其他 Render Lite 优化脚本、不要同时开启 DIL takeover。
+
+```js
+ChatGPTRenderLiteGeometryProbe.status()
+ChatGPTRenderLiteGeometryProbe.capture(10000) // 手动滚动 10 秒，到时自动恢复
+ChatGPTRenderLiteGeometryProbe.status().last
+ChatGPTRenderLiteGeometryProbe.restore()      // 随时手动提前恢复
+```
+
+探针临时包装 `Element.prototype.getBoundingClientRect`（在 `MAIN_WORLD`），保证返回**原始浏览器 DOMRect**，从不提供缓存或伪造高度；自动到时、切换会话、隐藏标签页或关闭页面时恢复原始 descriptor，若另一个插件在测量期间再替换此方法则不会覆盖对方。此探针有风险，适合在不重要的对话临时运行；安装并不代表已开启。
+
+返回的 `groups` 只有以下信息：
+
+- `category`: 几何测量对象位于 `scroll-host`、`turn-root`、`dil-response-root`、`inside-dil`、`inside-response`、`inside-turn`、`inside-transcript`、`outside-transcript` 等哪个 DOM 结构下；
+- `afterScrollend`: 是否发生在 `scrollend` 事件后约 200ms 的窗口里；**仅为时间邻近关系，不证明该读取属于 scrollend 回调**；
+- `calls`、`nativeMs`、`maxNativeMs`: 原生调用的次数与测得耗时；被迫 Style/Layout 可能包含在原生耗时中，但不会直接拆分出布局引擎耗时。
+
+不会打印消息内容、标识值、URL、React props 或几何坐标。最多统计 **50,000 次调用**、最长运行 **15 秒**。**全局包装本身有性能扰动，不能将这次结果用于宣称优化前后的性能百分比**，只用来确认“哪个 DOM 类型被读取”。
+
+如果输出显示高成本主要集中在 DIL 回复内部，可以再做**单条复杂消息的局部离屏隔离**实验；如果集中在 turn 根或滚动容器，需继续审查原生滚动锚点/测高机制。选定实验后，再在探针完全关闭的情况下采集新的 DevTools Trace 进行 A/B。
+
 ## 保护措施
 
 - **默认关闭**，不监听页面 Mutation，也不自动扫描消息。
