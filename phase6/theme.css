@@ -23,6 +23,8 @@ button.secondary { width: 100%; color: var(--ink); background: var(--surface); m
 button.secondary:hover { background: var(--surface-soft); }
 select { width: 100%; background: var(--surface); color: var(--ink); padding: 10px; margin-bottom: 10px; }
 input[type=file] { display: block; width: 100%; margin: 9px 0 18px; font-size: 12px; }
+input[type=search] { display: block; width: 100%; padding: 10px; background: var(--surface);
+  color: var(--ink); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
 :focus-visible { outline: 3px solid #80ab9f; outline-offset: 2px; }
 .shell { min-height: 100dvh; display: flex; flex-direction: column; }
 .topbar { height: 66px; flex-shrink: 0; background: var(--surface); border-bottom: 1px solid var(--border);
