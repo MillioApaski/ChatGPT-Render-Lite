@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Render Lite · Native Bridge Lab
 // @namespace    https://github.com/MillioApaski/ChatGPT-Render-Lite
-// @version      0.3.0
+// @version      0.4.0
 // @description  Opt-in original ChatGPT page renderer bridge experiment. Restores native UI on failure.
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -427,6 +427,97 @@ function manualCandidate(target){
   if(!candidates.length)throw Error('未找到安全的重复消息容器。请使用自定义 CSS 选择器');
   return candidates[0].root;
 }
+// Confirmed by a user-supplied live DIL message ancestry report.
+// These nodes may be only the currently mounted portion of a conversation.
+const NATIVE={
+  transcript:'[data-rail-chat-transcript]',
+  turn:'[data-turn-key]',
+  response:'[data-response-body]',
+  dil:'[data-dil-message-id]',
+  scroll:'[data-thread-frame-scrollbar]',
+  turnState:'[data-talvt-turn-state]'
+};
+function transcriptRoot(){
+  const nodes=[...document.querySelectorAll(NATIVE.transcript)]
+    .filter(node=>node instanceof HTMLElement&&findMain(node)&&!node.closest('[data-rl-native-bridge]'));
+  return nodes.length===1?nodes[0]:null;
+}
+function nativeTurnNodes(root=transcriptRoot()){
+  if(!root)return [];
+  const nodes=[...root.querySelectorAll(NATIVE.turn)]
+    .filter(node=>node instanceof HTMLElement&&!node.closest('[data-rl-native-bridge]'));
+  return nodes.filter(node=>!nodes.some(other=>other!==node&&other.contains(node)));
+}
+function nativeOverview(){
+  const root=transcriptRoot(),turns=nativeTurnNodes(root);
+  return {
+    version:'0.4.0',
+    transcriptCount:document.querySelectorAll(NATIVE.transcript).length,
+    mountedTurnCount:turns.length,
+    turnMarkers:document.querySelectorAll(NATIVE.turn).length,
+    dilMessageCount:document.querySelectorAll(NATIVE.dil).length,
+    responseBodies:document.querySelectorAll(NATIVE.response).length,
+    turnStateMarkers:document.querySelectorAll(NATIVE.turnState).length,
+    scrollHosts:document.querySelectorAll(NATIVE.scroll).length,
+    transcriptContainsComposer:Boolean(root?.querySelector(composerSelector)),
+    turnSamples:turns.slice(0,5).map(n=>({
+      hasDIL:!!n.querySelector(NATIVE.dil),
+      hasResponseBody:!!n.querySelector(NATIVE.response),
+      hasTurnState:!!n.querySelector(NATIVE.turnState),
+      childCount:n.children.length
+    })),
+    notice:'仅当前 DOM 挂载的消息；没有读取会话历史、正文或任何标识值'
+  };
+}
+function nativeSource(){
+  const root=transcriptRoot(),main=findMain(root);
+  if(!safeRoot(root,main))throw Error('无法隔离 transcript 容器或其内部包含输入区域');
+  const getNodes=()=>nativeTurnNodes(root),nodes=getNodes();
+  if(!nodes.length||nodes.length>OPTIONS.maxTurns)throw Error('当前 transcript 没有可预览的挂载消息');
+  return {selector:'native-turns',root,main,composer:main.querySelector(composerSelector),nodes,getNodes};
+}
+// Sample mounted keys during a manually performed scroll, without geometry
+// reads, text extraction or network traffic. Key values never leave the page.
+function monitorTurns(durationMs=12000){
+  const duration=Number(durationMs);
+  if(!Number.isFinite(duration)||duration<1000||duration>30000)
+    throw RangeError('监测时长须为 1000～30000ms');
+  const root=transcriptRoot();
+  if(!root)throw Error('找不到唯一的 transcript 容器');
+  const pathname=location.pathname,seen=new Set();
+  let previous=new Set(),min=Infinity,max=0,totalAdded=0,totalRemoved=0;
+  const samples=[],start=performance.now();
+  return new Promise(resolve=>{
+    let timer,finished=false;
+    function complete(reason){
+      if(finished)return;
+      finished=true;clearInterval(timer);
+      const result={
+        version:'0.4.0',elapsedMs:Math.round(performance.now()-start),
+        sampleCount:samples.length,minMounted:min===Infinity?0:min,
+        maxMounted:max,uniqueTurnKeys:seen.size,addedKeys:totalAdded,
+        removedKeys:totalRemoved,reason,samples,
+        interpretation:'滚动时已挂载 key 发生替换是按需挂载的证据；无法仅凭此证明 React 组件已卸载、何时重算布局或历史已完整加载'
+      };
+      console.info('[RL Bridge] turn churn',result);resolve(result);
+    }
+    function sample(){
+      if(location.pathname!==pathname||!root.isConnected){complete('route-or-root-changed');return;}
+      const active=nativeTurnNodes(root);
+      const keys=new Set(active.map(n=>n.getAttribute('data-turn-key')||n));
+      const added=[...keys].filter(k=>!previous.has(k)).length;
+      const removed=[...previous].filter(k=>!keys.has(k)).length;
+      for(const key of keys)seen.add(key);
+      totalAdded+=added;totalRemoved+=removed;
+      min=Math.min(min,active.length);max=Math.max(max,active.length);
+      samples.push({t:Math.round(performance.now()-start),mounted:active.length,
+        appeared:added,disappeared:removed,uniqueSeen:seen.size});
+      previous=keys;
+      if(performance.now()-start>=duration)complete('completed');
+    }
+    sample();timer=setInterval(sample,400);
+  });
+}
 function commonParent(nodes) {
   for(let a=nodes[0];a;a=a.parentElement) if(nodes.every(n=>a.contains(n)))return a;
   return null;
@@ -446,6 +537,7 @@ function selectSource(selector) {
 }
 function discover() {
   if(state.selector)return selectSource(state.selector);
+  if(transcriptRoot())return nativeSource();
   if(state.manualRoot?.isConnected&&state.manualPath===location.pathname)return sourceFromRoot(state.manualRoot,'picked');
   for(const selector of selectors)try{return selectSource(selector);}catch {}
   for(const main of document.querySelectorAll('main,[role="main"]')){
@@ -456,7 +548,8 @@ function discover() {
 }
 function snapshot(source) {
   const nodes=source.getNodes();
-  if(nodes.length<OPTIONS.minInferredRows||nodes.length>OPTIONS.maxTurns||nodes.some(n=>!source.root.contains(n)))throw Error('消息根节点改变，自动恢复');
+  const minimum=source.selector==='native-turns'?1:OPTIONS.minInferredRows;
+  if(nodes.length<minimum||nodes.length>OPTIONS.maxTurns||nodes.some(n=>!source.root.contains(n)))throw Error('消息根节点改变，自动恢复');
   let chars=0;
   const messages=nodes.map((node,i)=>{
     const txt=(node.textContent||'').slice(0,OPTIONS.maxPerTurn);
@@ -563,6 +656,7 @@ function queueSync(){
 function start(mode='preview'){
   if(!['preview','takeover'].includes(mode))throw RangeError('未知模式');
   if(!conversationRoute())throw Error('仅支持 ChatGPT 会话路由');
+  if(mode==='takeover'&&transcriptRoot())throw Error('新版 DIL transcript 可能只挂载部分消息：为防止丢失历史，暂时拒绝 takeover。请先运行 monitorTurns()');
   restore();
   const source=discover();
   const messages=snapshot(source);
@@ -594,7 +688,7 @@ function start(mode='preview'){
   window.addEventListener('keydown',keyboard,true);
   return status();
 }
-function status(){return {version:'0.3.0',mode:state.mode,selector:state.source?.selector||state.selector||'auto',
+function status(){return {version:'0.4.0',mode:state.mode,selector:state.source?.selector||state.selector||'auto',
  messages:state.view?.messages.length||0,mounted:state.view?.nodes.size||0,lastError:state.lastError,
  reactFiberMarker:state.source?Object.keys(state.source.nodes[0]||{}).some(k=>k.startsWith('__reactFiber$')):null};}
 function probe(){
@@ -608,7 +702,7 @@ function probe(){
       candidate:first?{rows:first.count,matchedBranches:first.hits}:null};
   });
   return {counts,anchors,containers,mainCount:containers.length,iframeCount:document.querySelectorAll('iframe').length,
-    route:conversationRoute()?'conversation':'other',version:'0.2.0',note:'匿名结构信息，不含消息文本'};
+    route:conversationRoute()?'conversation':'other',version:'0.4.0',note:'匿名结构信息，不含消息文本'};
 }
 // Read-only, anonymized structural report. No node text, HTML, IDs, URLs,
 // React props, attribute values, or raw class names are returned.
@@ -640,7 +734,7 @@ function structure(){
     reports.push({visitedNodes:nodes.length,limit:OPTIONS.maxDiagnosticNodes,
       depthLimit:OPTIONS.maxDiagnosticDepth,branches:nodes.slice(0,240)});
   }
-  return {version:'0.3.0',mainCount:roots.length,
+  return {version:'0.4.0',mainCount:roots.length,
     reports,note:'仅元素标签、路径、孩子数及属性名称；不包含任何对话文本、属性值或 React 数据'};
 }
 function selectedPath(target){
@@ -714,6 +808,8 @@ function setSelector(selector){
 function menu(label,fn){if(typeof GM_registerMenuCommand==='function')GM_registerMenuCommand(label,fn);}
 function safe(fn){return()=>{try{console.info('[RL Bridge]',fn());}catch(e){state.lastError=err(e);console.warn('[RL Bridge]',err(e));}};}
 menu('Phase6：扫描页面结构',safe(probe));
+menu('Phase6：检测新版 DIL 消息结构',safe(nativeOverview));
+menu('Phase6：记录消息挂载变化（12 秒内手动滚动）',safe(()=>monitorTurns(12000)));
 menu('Phase6：匿名 DOM 层级报告',safe(structure));
 menu('Phase6：点击消息定位容器',safe(pick));
 menu('Phase6：只读 React 组件路径',safe(fiberProbe));
@@ -724,6 +820,6 @@ menu('Phase6：设置消息 CSS 选择器',safe(()=>{
   const value=window.prompt('输入匹配每条消息的 CSS 选择器；留空恢复自动识别',state.selector||'');
   return value===null?status():setSelector(value.trim()||null);
 }));
-page.ChatGPTRenderLiteBridge=Object.freeze({probe,structure,fiberProbe,pick,start,restore,status,setSelector});
+page.ChatGPTRenderLiteBridge=Object.freeze({probe,structure,nativeOverview,monitorTurns,fiberProbe,pick,start,restore,status,setSelector});
 
 })();
