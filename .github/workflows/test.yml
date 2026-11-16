@@ -20,5 +20,6 @@ jobs:
         run: |
           node --check chatgpt-render-lite.user.js
           node --check chatgpt-geometry-cache.user.js
+          node --check chatgpt-phase5-diagnostics.user.js
       - name: Unit tests
         run: node --test tests/*.test.cjs
