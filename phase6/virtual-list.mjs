@@ -83,8 +83,12 @@ export class VirtualTimeline {
     this.messages = messages;
     this.index.reset(messages.length);
     this.resetNodes();
-    this.scroller.scrollTop = toBottom ? this.index.total : 0;
-    this.render();
+    this.scroller.scrollTop = 0;
+    this.render(); // Establish spacers and scroll height before setting bottom.
+    if (toBottom && this.messages.length) {
+      this.scroller.scrollTop = this.index.total;
+      this.render();
+    }
   }
 
   setMode(mode) {
@@ -104,12 +108,13 @@ export class VirtualTimeline {
     if (this.mode === 'full' && this.messages.length + messages.length > MAX_FULL_ROWS) {
       throw new RangeError('Full DOM baseline limit exceeded.');
     }
+    const oldTop = this.scroller.scrollTop;
     const delta = messages.length * this.estimate;
     this.messages = messages.concat(this.messages);
     this.index.prepend(messages.length);
-    // Preserve the old top-visible content's approximate document offset.
-    this.scroller.scrollTop += delta;
     this.resetNodes();
+    this.render(); // Update scroll height before applying the anchor adjustment.
+    this.scroller.scrollTop = oldTop + delta;
     this.render();
   }
 
