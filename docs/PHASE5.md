@@ -98,6 +98,10 @@ B 最严重帧在采样后 **11.37 秒**，294.4ms；主要归因 `514085…js` 
 
 **下一阶段需要一份在 B 同操作下录制的短 DevTools Performance Trace**：定位 `76629…js`（其强制样式/布局占 LoAF 归因脚本耗时 96.7%）和 `226913…js` 的对应同步调用栈、样式失效链及具体几何 getter，判断能否以减少 DOM 写/读交错解决。如果没有对应 Trace，不应直接去 patch minified bundle，也不能认定 React、Markdown、CSS selector 或某个扩展为根因。
 
+## DevTools Trace：Phase 5 调用链定位完成
+
+用户后续提供了 Chrome DevTools Performance Trace。已独立验证 `scrollend → 76629…js / J → getBoundingClientRect → UpdateLayoutTree + Layout`，38 次 `scrollend` 共 1.70s，内部同步 Style+Layout 共 1.65s。详细数据、证据限制与优化建议见 [2026-11-16 Trace 专项报告](./PHASE5_TRACE_20261116.md)。
+
 ## 验收标准
 
 1. 首先获得干净环境的 A 组和实际使用环境的 B 组各 3 次报告，且观察窗口与动作相近。
