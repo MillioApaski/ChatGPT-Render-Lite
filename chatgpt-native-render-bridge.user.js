@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Render Lite · Native Bridge Lab
 // @namespace    https://github.com/MillioApaski/ChatGPT-Render-Lite
-// @version      0.2.0
+// @version      0.3.0
 // @description  Opt-in original ChatGPT page renderer bridge experiment. Restores native UI on failure.
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -335,7 +335,8 @@ class VirtualTimeline {
 
 const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 if (page.ChatGPTRenderLiteBridge) return;
-const OPTIONS = {maxTurns:1200, maxChars:3000000, maxPerTurn:30000};
+const OPTIONS = {maxTurns:1200, maxChars:3000000, maxPerTurn:30000,
+ minInferredRows:5, maxDiagnosticNodes:1600, maxDiagnosticDepth:9};
 const selectors = [
   '[data-testid^="conversation-turn-"]',
   '[data-message-author-role]',
@@ -364,7 +365,8 @@ function sourceFromRoot(root,label='structure'){
   if(!safeRoot(root,main))throw Error('推断的消息区域包含输入框或越过了 main 边界');
   const getNodes=()=>[...root.children].filter(e=>e instanceof HTMLElement&&e.textContent?.trim());
   const nodes=getNodes();
-  if(nodes.length<2||nodes.length>OPTIONS.maxTurns)throw Error('推断的消息数量不在安全范围');
+  if(nodes.length<OPTIONS.minInferredRows||nodes.length>OPTIONS.maxTurns)
+    throw Error('推断的消息行少于 5 个，无法确认消息容器；已拒绝接管');
   return {selector:label,nodes,root,main,composer:main.querySelector(composerSelector),getNodes};
 }
 // DOM-structure inference does not rely on version-specific message attributes.
@@ -395,9 +397,9 @@ function structuralCandidates(main,onlyContaining=null){
   for(const [root,branches] of groups){
     if(!safeRoot(root,main)||onlyContaining&&!root.contains(onlyContaining))continue;
     const all=[...root.children].filter(e=>e instanceof HTMLElement&&e.textContent?.trim());
-    if(all.length<2||all.length>OPTIONS.maxTurns||branches.size<2)continue;
+    if(all.length<OPTIONS.minInferredRows||all.length>OPTIONS.maxTurns||branches.size<OPTIONS.minInferredRows)continue;
     const hits=all.filter(e=>branches.has(e)).length;
-    if(hits<2||hits/all.length<0.25)continue;
+    if(hits<OPTIONS.minInferredRows||hits/all.length<0.5)continue;
     result.push({root,count:all.length,hits,score:hits*2+10*hits/all.length+Math.min(all.length,100)/10});
   }
   result.sort((a,b)=>b.score-a.score);
@@ -431,7 +433,8 @@ function commonParent(nodes) {
 }
 function selectSource(selector) {
   const nodes=nodesFor(selector);
-  if(nodes.length<2||nodes.length>OPTIONS.maxTurns)throw Error('需要同一个区域的 2～1200 条消息');
+  if(nodes.length<OPTIONS.minInferredRows||nodes.length>OPTIONS.maxTurns)
+    throw Error('至少需要 5 个可靠消息行；当前区域不足或超出限制');
   const main=findMain(nodes[0]);
   if(!main||nodes.some(n=>findMain(n)!==main))throw Error('消息跨越多个 main');
   const root=commonParent(nodes);
@@ -453,7 +456,7 @@ function discover() {
 }
 function snapshot(source) {
   const nodes=source.getNodes();
-  if(nodes.length<2||nodes.length>OPTIONS.maxTurns||nodes.some(n=>!source.root.contains(n)))throw Error('消息根节点改变，自动恢复');
+  if(nodes.length<OPTIONS.minInferredRows||nodes.length>OPTIONS.maxTurns||nodes.some(n=>!source.root.contains(n)))throw Error('消息根节点改变，自动恢复');
   let chars=0;
   const messages=nodes.map((node,i)=>{
     const txt=(node.textContent||'').slice(0,OPTIONS.maxPerTurn);
@@ -591,7 +594,7 @@ function start(mode='preview'){
   window.addEventListener('keydown',keyboard,true);
   return status();
 }
-function status(){return {version:'0.2.0',mode:state.mode,selector:state.source?.selector||state.selector||'auto',
+function status(){return {version:'0.3.0',mode:state.mode,selector:state.source?.selector||state.selector||'auto',
  messages:state.view?.messages.length||0,mounted:state.view?.nodes.size||0,lastError:state.lastError,
  reactFiberMarker:state.source?Object.keys(state.source.nodes[0]||{}).some(k=>k.startsWith('__reactFiber$')):null};}
 function probe(){
@@ -606,6 +609,55 @@ function probe(){
   });
   return {counts,anchors,containers,mainCount:containers.length,iframeCount:document.querySelectorAll('iframe').length,
     route:conversationRoute()?'conversation':'other',version:'0.2.0',note:'匿名结构信息，不含消息文本'};
+}
+// Read-only, anonymized structural report. No node text, HTML, IDs, URLs,
+// React props, attribute values, or raw class names are returned.
+function structure(){
+  const roots=[...document.querySelectorAll('main,[role="main"]')].slice(0,3);
+  const reports=[];
+  for(const main of roots){
+    const nodes=[];
+    const walk=(node,depth,path)=>{
+      if(nodes.length>=OPTIONS.maxDiagnosticNodes||depth>OPTIONS.maxDiagnosticDepth)return;
+      if(!(node instanceof HTMLElement)||node.closest('[data-rl-native-bridge]'))return;
+      const children=[...node.children].filter(c=>c instanceof HTMLElement);
+      const tagCounts={};
+      for(const child of children)tagCounts[child.localName]=(tagCounts[child.localName]||0)+1;
+      const dataNames=node.getAttributeNames().filter(name=>
+        /^(data-|role$|contenteditable$)/.test(name)
+      ).slice(0,8);
+      const entry={path,depth,tag:node.localName,childCount:children.length,
+        tags:tagCounts,attrNames:dataNames};
+      // Only structural patterns: no class values or message text.
+      if(depth===0||children.length>=2||node.matches('article,[role="article"]')||
+        contentSelectors.some(selector=>node.matches(selector))){
+        nodes.push(entry);
+      }
+      if(depth<OPTIONS.maxDiagnosticDepth)
+        children.forEach((child,index)=>walk(child,depth+1,path?path+'.'+index:String(index)));
+    };
+    walk(main,0,'');
+    reports.push({visitedNodes:nodes.length,limit:OPTIONS.maxDiagnosticNodes,
+      depthLimit:OPTIONS.maxDiagnosticDepth,branches:nodes.slice(0,240)});
+  }
+  return {version:'0.3.0',mainCount:roots.length,
+    reports,note:'仅元素标签、路径、孩子数及属性名称；不包含任何对话文本、属性值或 React 数据'};
+}
+function selectedPath(target){
+  const main=findMain(target),chain=[];
+  if(!main)return {error:'目标不在 main 中'};
+  let item=target;
+  for(let step=0;item&&step<24;step++,item=item.parentElement){
+    const parent=item.parentElement,children=parent?[...parent.children]:[];
+    const tags={};
+    for(const child of children)tags[child.localName]=(tags[child.localName]||0)+1;
+    chain.push({tag:item.localName,
+      siblingIndex:children.indexOf(item),siblingCount:children.length,
+      siblingTags:tags,children:item.children.length,
+      attrNames:item.getAttributeNames().filter(n=>/^(data-|role$)/.test(n)).slice(0,8)});
+    if(item===main)break;
+  }
+  return {chain,note:'仅 DOM 祖先与兄弟结构，不含消息内容'};
 }
 function fiberProbe(){
   const s=state.source||discover(),samples=[];
@@ -639,6 +691,7 @@ function pick(){
     if(!(e.target instanceof HTMLElement)||!findMain(e.target))return;
     e.preventDefault();e.stopImmediatePropagation();
     try{
+      console.info('[RL Bridge] 点选结构',selectedPath(e.target));
       const root=manualCandidate(e.target),source=sourceFromRoot(root,'picked');
       state.manualRoot=root;state.manualPath=location.pathname;state.lastError=null;
       console.info('[RL Bridge] 已定位候选消息区域',{rows:source.nodes.length,rootTag:root.localName,
@@ -661,6 +714,7 @@ function setSelector(selector){
 function menu(label,fn){if(typeof GM_registerMenuCommand==='function')GM_registerMenuCommand(label,fn);}
 function safe(fn){return()=>{try{console.info('[RL Bridge]',fn());}catch(e){state.lastError=err(e);console.warn('[RL Bridge]',err(e));}};}
 menu('Phase6：扫描页面结构',safe(probe));
+menu('Phase6：匿名 DOM 层级报告',safe(structure));
 menu('Phase6：点击消息定位容器',safe(pick));
 menu('Phase6：只读 React 组件路径',safe(fiberProbe));
 menu('Phase6：预览轻量渲染器',safe(()=>start('preview')));
@@ -670,6 +724,6 @@ menu('Phase6：设置消息 CSS 选择器',safe(()=>{
   const value=window.prompt('输入匹配每条消息的 CSS 选择器；留空恢复自动识别',state.selector||'');
   return value===null?status():setSelector(value.trim()||null);
 }));
-page.ChatGPTRenderLiteBridge=Object.freeze({probe,fiberProbe,pick,start,restore,status,setSelector});
+page.ChatGPTRenderLiteBridge=Object.freeze({probe,structure,fiberProbe,pick,start,restore,status,setSelector});
 
 })();
