@@ -447,10 +447,29 @@ function verify(){
 function sync(){
   if(!verify())return;
   try{
-    const old=state.view.scroller.scrollTop;
-    const nearBottom=state.view.scroller.scrollHeight-state.view.scroller.clientHeight-old<80;
-    state.view.setMessages(snapshot(state.source),{toBottom:nearBottom});
-    if(!nearBottom){state.view.scroller.scrollTop=old;state.view.render();}
+    const next=snapshot(state.source);
+    const current=state.view.messages;
+    const same=current.length===next.length&&current.every((msg,i)=>msg.id===next[i].id);
+    if(same){
+      let modified=false;
+      next.forEach((msg,i)=>{
+        if(current[i].text===msg.text&&current[i].role===msg.role)return;
+        modified=true;
+        current[i]=msg;
+        const row=state.view.nodes.get(msg.id);
+        if(row){
+          row.className='turn turn--'+(msg.role==='user'?'user':'assistant');
+          const body=row.querySelector('.turn-body');
+          if(body){body.replaceChildren();renderSafeText(msg.text,body);}
+        }
+      });
+      if(modified)state.view.scheduleRender();
+    }else{
+      const old=state.view.scroller.scrollTop;
+      const nearBottom=state.view.scroller.scrollHeight-state.view.scroller.clientHeight-old<80;
+      state.view.setMessages(next,{toBottom:nearBottom});
+      if(!nearBottom){state.view.scroller.scrollTop=old;state.view.render();}
+    }
   }catch(e){state.lastError=err(e);restore();}
 }
 function queueSync(){
@@ -478,6 +497,7 @@ function start(mode='preview'){
   const view=new VirtualTimeline(scroll,{estimate:240,overscanPx:800});
   state.source=source;state.view=view;state.host=host;state.mode=mode;state.path=location.pathname;
   layout();view.setMessages(messages,{toBottom:true});
+  requestAnimationFrame(()=>{if(state.view===view&&state.mode!=='off'){view.scroller.scrollTop=view.scroller.scrollHeight;view.render();}});
   if(mode==='takeover') {
     state.previous={value:source.root.style.getPropertyValue('display'),priority:source.root.style.getPropertyPriority('display')};
     source.root.style.setProperty('display','none','important');
