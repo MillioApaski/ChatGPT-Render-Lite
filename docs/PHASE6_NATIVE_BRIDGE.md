@@ -50,6 +50,38 @@ ChatGPTRenderLiteBridge.restore()
 ChatGPTRenderLiteBridge.setSelector('main article') // 仅作示例
 ~~~
 
+## v0.4.0：新版 ChatGPT DIL DOM 实测标记
+
+根据真实聊天消息的匿名 DOM 祖先链，当前页面出现了如下标记：
+
+| 属性 | 用途（依照所处层级） |
+| --- | --- |
+| `data-rail-chat-transcript` | 聊天记录内容根 |
+| `data-thread-frame-scrollbar` | 当前滚动框架 |
+| `data-turn-key` | 某轮对话的 key |
+| `data-talvt-turn-state` | 当前轮的状态容器 |
+| `data-response-body` | 助手回复正文 |
+| `data-dil-response` / `data-dil-message-id` | 当前 DIL 消息正文结构 |
+
+重要：`data-talvt-turn-state` 的存在**不能证明**已实现消息虚拟化；必须观察向上滚动时同时挂载的 key 数量、已见 key 总数、节点替换情况。
+
+脚本升级后，在原版聊天页面的控制台执行：
+
+```js
+ChatGPTRenderLiteBridge.nativeOverview()       // 匿名 DIL 节点计数
+await ChatGPTRenderLiteBridge.monitorTurns(12000) // 执行后在 12 秒内手动向上滚动
+```
+
+第一份结果只包含属性存在性和数量；第二份结果每约 400ms 采样，汇总 `minMounted`、`maxMounted`、`uniqueTurnKeys`、`addedKeys`、`removedKeys`。内部比较实际 `data-turn-key` 值，但**不打印 key、消息 ID、文本、URL 或 React props**。
+
+如果 `uniqueTurnKeys` 明显大于 `maxMounted`，且 `removedKeys>0`，支持聊天列表按需替换或卸载 DOM 的假说，但仍不证明历史已经全部加载，更不能单凭此判断 React 组件计算开销是否消失；应结合滚动 Performance Trace。
+
+### 接管限制
+
+`data-rail-chat-transcript` 存在时，v0.4.0 的 `start('preview')` 可以只读镜像**当前已经挂载**的 `data-turn-key` 节点，即使只有一条，状态中的 `messages` 也仅代表“当前 DOM 中可见/已挂载”，不是完整对话轮数。**`start('takeover')` 明确拒绝执行**，避免只镜像部分消息后隐藏掉原生历史浏览能力。
+
+原网页有自己的滚动策略和 DIL 渲染组件。下一阶段如果证明原生已经在做 DOM 虚拟化，应优先优化消息测量/滚动锚点，而不是再做第二层虚拟列表。
+
 ## 保护措施
 
 - **默认关闭**，不监听页面 Mutation，也不自动扫描消息。
