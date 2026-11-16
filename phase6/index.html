@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Render Lite · Phase 6 独立渲染原型</title>
+  <link rel="stylesheet" href="./theme.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">RL</span><span>Render Lite <small>PHASE 06</small></span></div>
+      <span class="tag">独立渲染器 · 本地运行</span>
+    </header>
+    <main class="layout">
+      <aside class="side-panel">
+        <div class="eyebrow">PROOF OF CONCEPT</div>
+        <h1>只渲染<br>你正在看的消息。</h1>
+        <p class="muted">不加载 chatgpt.com 的 React、滚动监听或样式系统。验证长对话是否能以少量 DOM 节点稳定向上滚动。</p>
+        <section class="control-section">
+          <h2>01 · 测试数据</h2>
+          <label for="demo-size">生成不同长度的测试对话</label>
+          <select id="demo-size">
+            <option value="100">100 条消息</option>
+            <option value="1000" selected>1,000 条消息</option>
+            <option value="5000">5,000 条消息</option>
+            <option value="10000">10,000 条消息</option>
+          </select>
+          <button id="load-demo" type="button">生成测试对话</button>
+        </section>
+        <section class="control-section">
+          <h2>02 · 导入自己的记录</h2>
+          <label for="file-import">选择 ChatGPT 数据导出包中的 conversations.json</label>
+          <input id="file-import" type="file" accept=".json,application/json">
+          <label for="conversation-picker">从本地导出选择会话</label>
+          <select id="conversation-picker" disabled>
+            <option>尚未载入导出文件</option>
+          </select>
+          <p class="privacy">文件只在当前浏览器中解析，不会上传。仅还原文本，附件、复杂排版与分支编辑不保证完整。</p>
+        </section>
+        <section class="control-section">
+          <h2>03 · 验证渲染方式</h2>
+          <label for="render-mode">渲染模式</label>
+          <select id="render-mode">
+            <option value="virtual" selected>虚拟列表（推荐）</option>
+            <option value="full">全部 DOM（最多 1,200 条）</option>
+          </select>
+          <button id="prepend" class="secondary" type="button">在顶部插入 50 条历史消息</button>
+          <button id="jump-middle" class="secondary" type="button">跳转到对话中段</button>
+          <button id="benchmark" class="secondary" type="button">自动向上滚动并测量</button>
+        </section>
+        <p class="footnote">此原型**不是 ChatGPT 客户端**，不发送消息，也不接入账号接口。它只验证独立渲染可行性。</p>
+      </aside>
+      <section class="conversation-panel">
+        <div class="conversation-top">
+          <div>
+            <div class="eyebrow">CONVERSATION PREVIEW</div>
+            <h2 id="conversation-title">合成测试对话 · 1,000 条</h2>
+          </div>
+          <span class="pill" id="mode-pill">VIRTUAL</span>
+        </div>
+        <div id="scroller" class="scroller" role="region" aria-label="独立消息滚动区域"></div>
+        <div class="conversation-bottom">
+          <span id="view-range">就绪</span>
+          <span>仅本地预览 · 没有在线发送功能</span>
+        </div>
+      </section>
+      <aside class="metrics-panel">
+        <div class="eyebrow">LIVE METRICS</div>
+        <h2>渲染状态</h2>
+        <div class="metric"><span>全部消息</span><strong id="total-count">0</strong></div>
+        <div class="metric"><span>当前挂载消息</span><strong id="mounted-count">0</strong></div>
+        <div class="metric"><span>最近一次渲染耗时</span><strong id="render-cost">0ms</strong></div>
+        <div class="metric"><span>当前主文档 DOM 元素</span><strong id="dom-count">-</strong></div>
+        <div class="metric"><span>JS Heap（若支持）</span><strong id="heap-count">-</strong></div>
+        <div class="divider"></div>
+        <h2>滚动基准</h2>
+        <p class="muted tiny">脚本改变当前容器的 scrollTop，逐帧从底部滚动至顶部。记录动画帧间隔和被检测到的长任务。不是用户操作 INP，也不是与原站公平的 A/B。</p>
+        <div id="benchmark-output" class="benchmark-output">尚未运行基准测试</div>
+        <div class="divider"></div>
+        <h2>状态</h2>
+        <p id="status" aria-live="polite">原型已就绪。</p>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
