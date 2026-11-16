@@ -229,6 +229,33 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     assert.equal(result.messages,55);
     await client.run("ChatGPTRenderLiteBridge.restore()");
     await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    // The short-lived global getBoundingClientRect wrapper must return native
+    // DOMRects and restore the exact original prototype method in Chromium.
+    const geometrySource=await readFile(new URL('../chatgpt-geometry-target-probe.user.js',import.meta.url),'utf8');
+    await client.run(geometrySource);
+    const beforeProbe=await client.run(`(() => {
+      window.__originalGeometryForTest=Element.prototype.getBoundingClientRect;
+      const started=ChatGPTRenderLiteGeometryProbe.capture(1200);
+      const node=document.querySelector('#messages');
+      const rect=node.getBoundingClientRect();
+      document.dispatchEvent(new Event('scrollend',{bubbles:true}));
+      node.firstElementChild.getBoundingClientRect();
+      return {active:started.active,width:rect.width,wrapped:Element.prototype.getBoundingClientRect!==window.__originalGeometryForTest};
+    })()`);
+    assert.equal(beforeProbe.active,true);
+    assert.equal(beforeProbe.wrapped,true);
+    assert.ok(beforeProbe.width>0);
+    await until(()=>client.run("ChatGPTRenderLiteGeometryProbe.status().lastReason==='completed'"),4000);
+    const afterProbe=await client.run(`({
+      restored:Element.prototype.getBoundingClientRect===window.__originalGeometryForTest,
+      calls:ChatGPTRenderLiteGeometryProbe.status().last.calls,
+      scrollend:ChatGPTRenderLiteGeometryProbe.status().last.scrollendEvents,
+      groupCount:ChatGPTRenderLiteGeometryProbe.status().last.groups.length
+    })`);
+    assert.equal(afterProbe.restored,true);
+    assert.ok(afterProbe.calls>=2);
+    assert.ok(afterProbe.scrollend>=1);
+    assert.ok(afterProbe.groupCount>=1);
     await client.run("history.pushState({},'','/c/new-conversation')");
     await until(()=>client.run("ChatGPTRenderLiteBridge.status().mode==='off'"),6000);
     assert.deepEqual(client.errors,[]);
