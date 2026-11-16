@@ -446,7 +446,12 @@ function nativeTurnNodes(root=transcriptRoot()){
   if(!root)return [];
   const nodes=[...root.querySelectorAll(NATIVE.turn)]
     .filter(node=>node instanceof HTMLElement&&!node.closest('[data-rl-native-bridge]'));
-  return nodes.filter(node=>!nodes.some(other=>other!==node&&other.contains(node)));
+  const markerSet=new Set(nodes);
+  return nodes.filter(node=>{
+    for(let parent=node.parentElement;parent&&parent!==root;parent=parent.parentElement)
+      if(markerSet.has(parent))return false;
+    return true;
+  });
 }
 function nativeOverview(){
   const root=transcriptRoot(),turns=nativeTurnNodes(root);
@@ -556,7 +561,7 @@ function snapshot(source) {
     chars+=txt.length;
     const author=node.matches('[data-message-author-role]')?node:node.querySelector('[data-message-author-role]');
     const role=author?.getAttribute('data-message-author-role')||'unknown';
-    const key=node.getAttribute('data-message-id')||node.getAttribute('data-turn-id')||node.getAttribute('data-testid')||String(i);
+    const key=node.getAttribute('data-turn-key')||node.getAttribute('data-message-id')||node.getAttribute('data-turn-id')||node.getAttribute('data-testid')||String(i);
     return {id:String(i)+':'+key,role:role==='user'?'user':role==='assistant'?'assistant':'unknown',text:txt};
   });
   if(chars>OPTIONS.maxChars)throw Error('镜像文本太大，已自动恢复');
