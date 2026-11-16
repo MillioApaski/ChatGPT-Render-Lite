@@ -96,6 +96,8 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
     assert.equal(await client.run("document.querySelector('#composer textarea').isConnected"),true);
     await client.run("document.querySelector('#messages').lastElementChild.textContent='新回复 <script>not executed</script>'");
+    await new Promise(r=>setTimeout(r,950));
+    console.log('PHASE6_BRIDGE_DEBUG',await client.run("({status:ChatGPTRenderLiteBridge.status(),lastDOM:document.querySelector('#messages').lastElementChild.textContent,mirrorLast:[...document.querySelector('[data-rl-native-bridge]').shadowRoot.querySelectorAll('.turn')].at(-1)?.textContent,scrollerTop:document.querySelector('[data-rl-native-bridge]').shadowRoot.querySelector('.scroll')?.scrollTop})"));
     await until(()=>client.run("document.querySelector('[data-rl-native-bridge]')?.shadowRoot.textContent.includes('新回复')"));
     assert.equal(await client.run("document.querySelector('[data-rl-native-bridge]').shadowRoot.querySelectorAll('script').length"),0);
     await client.run('window.confirm=()=>true');
