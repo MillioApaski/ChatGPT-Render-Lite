@@ -82,6 +82,51 @@ await ChatGPTRenderLiteBridge.monitorTurns(12000) // 执行后在 12 秒内手�
 
 原网页有自己的滚动策略和 DIL 渲染组件。下一阶段如果证明原生已经在做 DOM 虚拟化，应优先优化消息测量/滚动锚点，而不是再做第二层虚拟列表。
 
+## v0.4.0：真实长对话按需挂载证据（2026-11-16）
+
+来自用户原版 ChatGPT 网页中的匿名检测：
+
+| 指标 | 结果 |
+| --- | ---: |
+| transcript 根 | 1 |
+| 初始已挂载 `data-turn-key` | 1 |
+| 初始 DIL message / response body / turn state | 均为 1 |
+| 12 秒采样数 | 30 |
+| 最少 / 最多同时挂载的 turn | **1 / 5** |
+| 采样过程中出现过的不同 turn key | **9** |
+| addedKeys / removedKeys | **9 / 7** |
+
+时间线摘录：
+
+- **4.235 秒**：2 个同时挂载的 turn，出现 1 个 key、消失 1 个 key。
+- **5.579 秒**：3 个同时挂载的 turn，出现 2 个、消失 1 个。
+- **10.523 秒**：5 个同时挂载的 turn，出现 4 个新 key。
+- **12.013 秒**：2 个仍挂载。
+
+### 可以确认什么？
+
+滚动时 `data-turn-key` 集合持续变化，且同时挂载 turn 数量保持很小，**强有力地支持原生 ChatGPT 已经按需挂载/回收消息 DOM**。在此情境下，再加一层独立“消息虚拟列表”没有明确价值，反而可能重复实现、干扰原生滚动与恢复。
+
+### 仍不能确认什么？
+
+- 没有证明 React Fiber 卸载，或 React 计算工作量变小。
+- **400ms 抽样会漏掉短暂出现/消失的消息**，`addedKeys` 包含初始化时已有的首个 key，不等于页面整个时间段实际创建的 DOM 数量。
+- 这 9 个 key 是期间观察到的不同标记，不是完整会话消息数。
+- 没有测出 Style/Layout、LoAF 或 INP；不能把这次统计转化为性能提升百分比。
+
+### 调整技术路线：直接优化原有滚动测量与单条复杂消息
+
+旧版 `chatgpt-render-lite.user.js` 和 `chatgpt-geometry-cache.user.js` 使用 `[data-testid^="conversation-turn-"]`，当前用户页面该选择器 **0 命中**。因此以这个选择器为准的 Phase 3/4 逻辑对当前 DOM 很可能无效。Phase 4 的缓存目标是滚动容器的 `clientHeight`，而以前的 Trace 主要瓶颈是不同路径触发的 **`getBoundingClientRect()` 与强制同步 Style/Layout**，二者并不等价。
+
+后续工作应按以下顺序验证：
+
+1. **分离真实瓶颈**：只加载原网页，其他 Render Lite 脚本关闭；同一长对话、相同滚动操作，再录 Performance Trace，确认 `scrollend` 的受迫布局开销及 DIL 子树更新是否仍主导。
+2. **定位实际几何测量对象**：明确 scrollend 时读取的是滚动容器、turn 的外壳，还是 DIL 正文内部组件。不能对所有 `getBoundingClientRect` 全局缓存，因为其计算受样式、位置、视口与动态内容影响。
+3. **做独立、默认关闭的局部实验**：如果成本集中在单条很长的 DIL 回复，验证针对离屏 DIL 块的样式隔离；如果成本集中在原生滚动管理，探索与现有测量逻辑兼容的只读高度缓存/合并更新。每一种模式都需要独立 A/B Trace，证明总 Style+Layout、scrollend、长任务真实下降。
+4. **失败时不改原网页**：永不默认隐藏真实 transcript；不能破坏搜索定位、滚动锚点、代码块、引用与流式生成。
+
+目前 PR #5 保留为**原版 DIL 结构的诊断与预览实验**，原生 DIL 页的 takeover 被明确阻止。不能宣称“已经替换 React 渲染器”或“已经修复卡顿”。
+
 ## 保护措施
 
 - **默认关闭**，不监听页面 Mutation，也不自动扫描消息。
