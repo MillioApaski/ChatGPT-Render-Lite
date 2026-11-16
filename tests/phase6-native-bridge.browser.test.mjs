@@ -285,6 +285,8 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     })()`);
     const containmentStarted=await client.run('ChatGPTRenderLiteDILContainment.enable()');
     assert.equal(containmentStarted.active,true);
+    assert.equal(containmentStarted.pending,false,'resolved enable() must not report pending:true');
+    assert.equal(containmentStarted.version,'0.1.1');
     assert.ok(containmentStarted.appliedBlocks>=4,
       'offscreen DIL paragraphs should be containable');
     assert.ok(Math.abs(containmentStarted.afterHeight-containmentStarted.beforeHeight)<=
