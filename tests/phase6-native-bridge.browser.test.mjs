@@ -124,7 +124,7 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     assert.equal(falsePositive.counts['[data-testid^="conversation-turn-"]'],0);
     assert.equal(falsePositive.containers[0].candidate,null);
     const structure=await client.run('ChatGPTRenderLiteBridge.structure()');
-    assert.equal(structure.version,'0.3.0');
+    assert.equal(structure.version,'0.4.0');
     assert.ok(structure.reports.length>0);
     assert.ok(structure.reports[0].branches.some(b=>b.childCount===2));
     assert.ok(!JSON.stringify(structure).includes('布局区域'), 'report must not return text');
