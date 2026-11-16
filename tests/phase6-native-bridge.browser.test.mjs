@@ -135,6 +135,61 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
     assert.equal(await client.run("document.querySelector('[data-rl-native-bridge]')===null"),true);
 
+    // The real 2026 ChatGPT page uses data-rail-chat-transcript and
+    // data-turn-key, with nested data-dil-message-id/data-response-body.
+    // A partial mounted subset must be previewable but never taken over.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      root.replaceChildren();
+      const transcript=document.createElement('div');
+      transcript.setAttribute('data-rail-chat-transcript','');
+      for(let i=0;i<6;i++){
+        const turn=document.createElement('div');
+        turn.setAttribute('data-turn-key','turn-'+i);
+        const state=document.createElement('div');
+        state.setAttribute('data-talvt-turn-state','');
+        const response=document.createElement('div');
+        response.setAttribute('data-response-body','');
+        const dil=document.createElement('div');
+        dil.setAttribute('data-dil-message-id','private-'+i);
+        dil.textContent='DIL text '+i;
+        response.append(dil);state.append(response);turn.append(state);
+        transcript.append(turn);
+      }
+      root.append(transcript);
+    })()`);
+    const detected=await client.run('ChatGPTRenderLiteBridge.nativeOverview()');
+    assert.equal(detected.version,'0.4.0');
+    assert.equal(detected.transcriptCount,1);
+    assert.equal(detected.mountedTurnCount,6);
+    assert.equal(detected.dilMessageCount,6);
+    assert.equal(detected.turnStateMarkers,6);
+    assert.ok(!JSON.stringify(detected).includes('private-'));
+    const monitor=await client.run(`(async()=>{
+      const pending=ChatGPTRenderLiteBridge.monitorTurns(1200);
+      setTimeout(()=>{
+        const root=document.querySelector('[data-rail-chat-transcript]');
+        root.firstElementChild.remove();
+        const fresh=document.createElement('div');
+        fresh.setAttribute('data-turn-key','turn-7');
+        fresh.textContent='new text';
+        root.append(fresh);
+      },500);
+      return await pending;
+    })()`);
+    assert.equal(monitor.reason,'completed');
+    assert.equal(monitor.minMounted,6);
+    assert.equal(monitor.maxMounted,6);
+    assert.ok(monitor.uniqueTurnKeys>=7,'must report key turnover without outputting values');
+    assert.ok(!JSON.stringify(monitor).includes('turn-7'));
+    result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.selector,'native-turns');
+    assert.equal(result.messages,6);
+    await assert.rejects(client.run("ChatGPTRenderLiteBridge.start('takeover')"),
+      /DIL transcript|拒绝 takeover/);
+    assert.equal(await client.run("document.querySelector('[data-rail-chat-transcript]').style.display"),'');
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+
     // Regression: newer ChatGPT markup may use no legacy test IDs, role
     // attributes or article tags. Detect repeated div rows via prose bodies.
     await client.run(`(() => {
