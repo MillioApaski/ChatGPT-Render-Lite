@@ -108,6 +108,44 @@ test('real Chromium bridge: native preview, reversible takeover, route guard', {
     await client.run("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
     assert.equal(await client.run('ChatGPTRenderLiteBridge.status().mode'),'off');
+    // Regression: newer ChatGPT markup may use no legacy test IDs, role
+    // attributes or article tags. Detect repeated div rows via prose bodies.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      root.replaceChildren();
+      for(let i=0;i<55;i++){
+        const row=document.createElement('div');
+        row.className='opaque-turn-wrapper';
+        const body=document.createElement('div');
+        body.className='prose';
+        body.textContent='历史消息 ' + i + '：' + ('内容片段 '.repeat(20));
+        row.append(body);
+        root.append(row);
+      }
+    })()`);
+    const newer=await client.run('ChatGPTRenderLiteBridge.probe()');
+    assert.equal(newer.counts['[data-testid^="conversation-turn-"]'],0);
+    assert.equal(newer.counts['main article'],0);
+    assert.equal(newer.anchors['.prose'],55);
+    assert.equal(newer.containers[0].candidate.rows,55);
+    result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.mode,'preview');
+    assert.equal(result.messages,55);
+    assert.equal(result.selector,'inferred');
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+
+    // Click picker must work without class hints and must not hide the original.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      [...root.children].forEach(row=>row.firstElementChild.removeAttribute('class'));
+      ChatGPTRenderLiteBridge.pick();
+      root.children[8].firstElementChild.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+    })()`);
+    result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.selector,'picked');
+    assert.equal(result.messages,55);
+    await client.run("ChatGPTRenderLiteBridge.restore()");
     await client.run("ChatGPTRenderLiteBridge.start('preview')");
     await client.run("history.pushState({},'','/c/new-conversation')");
     await until(()=>client.run("ChatGPTRenderLiteBridge.status().mode==='off'"),6000);
