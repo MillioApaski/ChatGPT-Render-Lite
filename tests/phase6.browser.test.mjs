@@ -129,6 +129,17 @@ test('Phase 6 Chromium smoke: 10k virtual rows, anchor, full baseline, worker im
     assert.equal(stats.total, '1,000');
     assert.ok(stats.mounted < 40, 'virtual DOM should remain bounded at 1000 messages');
 
+    // Run the same 1000-message fixture under both modes. CI timing is
+    // diagnostic only: a single headless run is not a statistically valid speedup.
+    await cdp.evalJs("document.querySelector('#benchmark').click()");
+    await waitFor(async () =>
+      (await cdp.evalJs("document.querySelector('#status').textContent")).includes('基准完成'),
+      30000
+    );
+    const virtualBaseline = await cdp.evalJs("document.querySelector('#benchmark-output').textContent");
+    assert.ok(virtualBaseline.includes('虚拟列表'));
+    console.log('\nPhase 6 Chromium virtual baseline (1000 synthetic messages):\n' + virtualBaseline);
+
     await cdp.evalJs("document.querySelector('#demo-size').value='10000';document.querySelector('#load-demo').click()");
     await waitFor(async () =>
       (await cdp.evalJs("document.querySelector('#total-count').textContent")) === '10,000'
@@ -151,6 +162,14 @@ test('Phase 6 Chromium smoke: 10k virtual rows, anchor, full baseline, worker im
     await cdp.evalJs("document.querySelector('#demo-size').value='1000';document.querySelector('#load-demo').click()");
     await cdp.evalJs("document.querySelector('#render-mode').value='full';document.querySelector('#render-mode').dispatchEvent(new Event('change'))");
     await waitFor(async () => (await cdp.evalJs("document.querySelectorAll('.turn').length")) === 1000);
+    await cdp.evalJs("document.querySelector('#benchmark').click()");
+    await waitFor(async () =>
+      (await cdp.evalJs("document.querySelector('#status').textContent")).includes('基准完成'),
+      30000
+    );
+    const fullBaseline = await cdp.evalJs("document.querySelector('#benchmark-output').textContent");
+    assert.ok(fullBaseline.includes('全部 DOM'));
+    console.log('\nPhase 6 Chromium full DOM baseline (1000 synthetic messages):\n' + fullBaseline);
 
     // Restore virtual mode before importing text from a local Blob.
     await cdp.evalJs("document.querySelector('#render-mode').value='virtual';document.querySelector('#render-mode').dispatchEvent(new Event('change'))");
