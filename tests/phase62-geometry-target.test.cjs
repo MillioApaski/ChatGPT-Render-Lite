@@ -67,7 +67,7 @@ function environment() {
     fireScrollend: () => scrollend?.(),
     pagehide: () => pagehide?.(),
     visibility: () => visibility?.(),
-    tick: () => { for (const [id, t] of [...timers]) if (t.ms >= 1000) { t.fn(); if (timers.has(id)) timers.delete(id); } },
+    tick: () => { for (const [, t] of [...timers]) if (t.ms === 300) t.fn(); },
   };
 }
 
