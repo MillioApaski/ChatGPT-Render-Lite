@@ -131,6 +131,21 @@ ChatGPTRenderLitePhase4.restore();
 请按 **off → observe → cache** 做三组交互对照，每组至少三次，并同步导出 Performance trace 观察 `scroll → reconcileViewport → clientHeight` 是否真的缩短。历史 Trace 没有证明那个 `clientHeight` 就是本实验识别的滚动容器，所以命中率可能是 0。
 
 
+## Phase 6：独立虚拟消息渲染器（POC）
+
+[打开 Phase 6 源码](./phase6/) | [完整运行与测试说明](./phase6/README.md)
+
+在一个**完全独立的本地页面**上实现变高消息虚拟化，而不是叠加在 ChatGPT 原站上：可生成 100～10,000 条长短混合消息，也可导入本地 `conversations.json`，在模块 Worker 内解析当前对话的文本消息。可用“虚拟列表”和上限 1,200 条的“全部 DOM”对照模式进行模拟滚动基准测试。
+
+在 Windows PowerShell 中：
+
+```powershell
+cd phase6
+py -m http.server 8000
+```
+
+访问 [http://localhost:8000](http://localhost:8000)。无需第三方依赖、API Key 或云服务器；这不是在线 ChatGPT 客户端，**不使用账号/Plus 会话能力**，也不对现有网页实施 DOM 接管。Phase 5 Trace 定位的原网页 `scrollend` 强制 Style/Layout 问题不会因为本原型存在而自动消失。
+
 ## 开发
 
 无需构建工具或外部运行时依赖，用户脚本入口：[`chatgpt-render-lite.user.js`](./chatgpt-render-lite.user.js)。
