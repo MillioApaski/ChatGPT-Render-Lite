@@ -131,6 +131,13 @@ ChatGPTRenderLitePhase4.restore();
 请按 **off → observe → cache** 做三组交互对照，每组至少三次，并同步导出 Performance trace 观察 `scroll → reconcileViewport → clientHeight` 是否真的缩短。历史 Trace 没有证明那个 `clientHeight` 就是本实验识别的滚动容器，所以命中率可能是 0。
 
 
+## Phase 5：性能瓶颈定位（独立诊断）
+
+新增可选的 [Phase 5 只读性能诊断脚本](./chatgpt-phase5-diagnostics.user.js)，通过 PerformanceObserver 记录 Long Animation Frames、Long Tasks 和部分 Event Timing，不修改页面行为、不上传数据。
+
+**默认不采样**。使用 Tampermonkey 菜单手动开始、停止和导出 JSON。历史 2026-10-16 Trace 证明了重复的同步样式刷新，但并未锁定当前版本的 React/Markdown 根因。使用方法、A/B 对照和证据边界见 [Phase 5 诊断说明](./docs/PHASE5.md)。
+
+
 ## 开发
 
 无需构建工具或外部运行时依赖，用户脚本入口：[`chatgpt-render-lite.user.js`](./chatgpt-render-lite.user.js)。
