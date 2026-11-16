@@ -345,7 +345,7 @@ const selectors = [
 const state = {mode:'off',selector:null,source:null,host:null,view:null,observer:null,timer:null,watch:null,resize:null,previous:null,path:null,lastError:null};
 const err = e => e instanceof Error ? e.message : String(e);
 const conversationRoute = () => /^\/(?:c|g)\//.test(location.pathname);
-const element = (name,text) => {const e=document.createElement(name);if(text!==undefined)e.textContent=String(text);return e;};
+const bridgeElement = (name,text) => {const e=document.createElement(name);if(text!==undefined)e.textContent=String(text);return e;};
 function nodesFor(selector) {
   const all=[...document.querySelectorAll(selector)].filter(e=>e instanceof HTMLElement && e.closest('main'));
   return all.filter(e=>!all.some(p=>p!==e && p.contains(e)));
@@ -464,16 +464,16 @@ function start(mode='preview'){
   const source=discover();
   const messages=snapshot(source);
   if(mode==='takeover'&&!window.confirm('高风险实验：将原消息区域暂时隐藏，显示只读虚拟消息镜像。React 依然运行。按 Esc 恢复，确定继续？'))return {cancelled:true};
-  const host=element('div');host.setAttribute('data-rl-native-bridge','');
+  const host=bridgeElement('div');host.setAttribute('data-rl-native-bridge','');
   document.body.append(host);
   const shadow=host.attachShadow({mode:'open'});
-  const style=element('style',css);
-  const shell=element('section');shell.className='shell';
-  const bar=element('div');bar.className='bar';
-  bar.append(element('strong','Render Lite · 原网页消息镜像'),element('span',String(messages.length)+' 条'));
-  const close=element('button','恢复原版');close.addEventListener('click',restore);bar.append(close);
-  const scroll=element('div');scroll.className='scroll';
-  const hint=element('div','只读文本镜像。图片、引用、代码复制等请恢复原版后使用。');hint.className='hint';
+  const style=bridgeElement('style',css);
+  const shell=bridgeElement('section');shell.className='shell';
+  const bar=bridgeElement('div');bar.className='bar';
+  bar.append(bridgeElement('strong','Render Lite · 原网页消息镜像'),bridgeElement('span',String(messages.length)+' 条'));
+  const close=bridgeElement('button','恢复原版');close.addEventListener('click',restore);bar.append(close);
+  const scroll=bridgeElement('div');scroll.className='scroll';
+  const hint=bridgeElement('div','只读文本镜像。图片、引用、代码复制等请恢复原版后使用。');hint.className='hint';
   shell.append(bar,scroll,hint);shadow.append(style,shell);
   const view=new VirtualTimeline(scroll,{estimate:240,overscanPx:800});
   state.source=source;state.view=view;state.host=host;state.mode=mode;state.path=location.pathname;
