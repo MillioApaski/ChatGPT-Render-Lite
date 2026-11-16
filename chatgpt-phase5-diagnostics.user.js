@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Render Lite - Phase 5 Diagnostics
 // @namespace    https://github.com/MillioApaski/ChatGPT-Render-Lite
-// @version      0.1.0
+// @version      0.1.1
 // @description  Opt-in, read-only browser performance sampling for ChatGPT. No hooks or network requests.
 // @match        https://chatgpt.com/*
 // @noframes
@@ -18,11 +18,18 @@
 
   // Phase 5 is separate from the optimization scripts, and disabled until
   // explicitly started. No React access, DOM mutation, API patching, or uploads.
-  const VERSION = '0.1.0';
+  const VERSION = '0.1.1';
   const MAX_RECORDS = 600;
   const MAX_SCRIPTS_PER_FRAME = 4;
   const TOP_SCRIPTS = 12;
-  const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
+  // Treat all of these as candidates, not verified ChatGPT DOM contracts.
+  // When no selector matches, report null rather than a misleading zero.
+  const TURN_SELECTORS = Object.freeze({
+    testId: '[data-testid^="conversation-turn-"]',
+    messageId: '[data-message-id]',
+    authorRole: '[data-message-author-role]',
+    turnId: '[data-turn-id]',
+  });
   const supported = new Set(
     typeof PerformanceObserver === 'function'
       ? (PerformanceObserver.supportedEntryTypes || []) : []
@@ -59,14 +66,25 @@
     list.push(item);
   }
 
-  function countTurns() {
-    return document.querySelectorAll(TURN_SELECTOR).length;
+  function countTurnCandidates() {
+    const selectorCounts = {};
+    let turns = null;
+    let matchedSelector = null;
+    for (const [key, selector] of Object.entries(TURN_SELECTORS)) {
+      const count = document.querySelectorAll(selector).length;
+      selectorCounts[key] = count;
+      if (turns === null && count > 0) {
+        turns = count;
+        matchedSelector = key;
+      }
+    }
+    return { turns, matchedSelector, selectorCounts };
   }
 
   function snapshot() {
     return {
       atMs: number(performance.now()),
-      turns: countTurns(),
+      ...countTurnCandidates(),
       domNodes: document.getElementsByTagName('*').length,
       jsHeapUsedBytes: number(performance.memory?.usedJSHeapSize),
       documentVisibility: document.visibilityState,
@@ -183,7 +201,7 @@
       // Sample conversation size only; do not walk the whole DOM every interval.
       pushBounded(session.turnSamples, {
         atMs: number(performance.now()),
-        turns: countTurns(),
+        ...countTurnCandidates(),
       });
     }, 5000);
     console.info('[Render Lite Phase 5] Recording started. Reproduce the stutter, then stop and export via Tampermonkey menu.');
@@ -247,8 +265,14 @@
       longTaskMaxMs: taskDurations.length ? Math.max(...taskDurations) : null,
       totalThresholdedEventCount: s.totalEventCount,
       retainedEventCount: s.events.length,
+      distinctEventStartTimestamps: new Set(s.events.map((x) => x.startMs)).size,
+      retainedEventsWithInteractionId: s.events.filter((x) => x.interactionId > 0).length,
+      retainedPointerTransitionEventEntries: s.events.filter(
+        (x) => /^(?:pointerover|pointerout|pointerenter|pointerleave|mouseover|mouseout|mouseenter|mouseleave)$/.test(x.name)
+      ).length,
       thresholdedEventP95Ms: percentile(eventDurations, 0.95),
       worstEvent: [...s.events].sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0))[0] || null,
+      warning: 'Event Timing entries include duplicated pointer transitions and are not individual interactions or INP.',
       topScriptSourcesFromRetainedLoafFrames: topSources,
     };
   }
@@ -260,7 +284,7 @@
     }
     if (session.running) stop();
     const payload = {
-      note: 'Read-only browser sampling. Event Timing is thresholded; not a complete INP. LoAF captures only long frames; source totals are partial and may overlap.',
+      note: 'Read-only browser sampling. Event Timing is thresholded, may contain many pointer transitions for the same timestamp, and is not INP. Conversation selectors are heuristic; unmatched means unknown, not 0. LoAF captures only long frames; source totals are partial and may overlap.',
       summary: summarize(session),
       recording: session,
     };
