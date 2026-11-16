@@ -33,9 +33,12 @@ function percentile(arr, quantile) {
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(performance.now())));
 
 function updateStatistics(info) {
+  const changedDataset = latestStats?.total !== info.total || latestStats?.mode !== info.mode;
   latestStats = info;
   const now = performance.now();
-  if (now - lastStatsAt < 150) return;
+  // Never throttle a dataset/mode change: that can leave "1,000" on screen
+  // indefinitely if the next ResizeObserver/scroll event does not fire.
+  if (!changedDataset && now - lastStatsAt < 150) return;
   lastStatsAt = now;
   ui.total.textContent = formatNumber(info.total);
   ui.mounted.textContent = formatNumber(info.mounted);
