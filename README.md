@@ -131,6 +131,14 @@ ChatGPTRenderLitePhase4.restore();
 请按 **off → observe → cache** 做三组交互对照，每组至少三次，并同步导出 Performance trace 观察 `scroll → reconcileViewport → clientHeight` 是否真的缩短。历史 Trace 没有证明那个 `clientHeight` 就是本实验识别的滚动容器，所以命中率可能是 0。
 
 
+## Phase 6.1：原版 ChatGPT 消息渲染桥接实验（独立脚本）
+
+[安装实验版](https://raw.githubusercontent.com/MillioApaski/ChatGPT-Render-Lite/feature/phase6-native-render-bridge/chatgpt-native-render-bridge.user.js) | [使用说明与局限](./docs/PHASE6_NATIVE_BRIDGE.md)
+
+**默认关闭。** 尝试从原版 ChatGPT 网页读取已渲染的消息并交给独立虚拟列表。可先在浮层预览；手动确认后，实验性隐藏经过边界验证的原消息区域。按 Esc 或菜单可恢复原版。
+
+这**不是**真正卸载 React 消息组件：React 仍可能执行 JS，镜像只是简化文本且消息内部控件不可用。需要在真实网页进行 Performance A/B，才能判断 Phase 5 中的 scrollend/Style/Layout 开销是否降低。本脚本不更改现有主脚本或 Plus 账号连接。
+
 ## 开发
 
 无需构建工具或外部运行时依赖，用户脚本入口：[`chatgpt-render-lite.user.js`](./chatgpt-render-lite.user.js)。

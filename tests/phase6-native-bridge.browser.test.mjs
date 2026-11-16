@@ -1,0 +1,315 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn,spawnSync} from 'node:child_process';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {createServer} from 'node:http';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function until(fn,ms=12000){
+  const end=Date.now()+ms;
+  while(Date.now()<end){try{const x=await fn();if(x)return x;}catch{}await sleep(80);}
+  throw Error('Timed out waiting for browser condition');
+}
+async function cdp(port){
+  const target=await until(async()=>{
+    const data=await(await fetch('http://127.0.0.1:'+port+'/json')).json();
+    return data.find(x=>x.type==='page'&&x.webSocketDebuggerUrl);
+  });
+  const socket=new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve,reject)=>{
+    socket.addEventListener('open',resolve,{once:true});
+    socket.addEventListener('error',reject,{once:true});
+  });
+  const pending=new Map(),errors=[];let seq=0;
+  socket.addEventListener('message',e=>{
+    const msg=JSON.parse(String(e.data));
+    if(msg.method==='Runtime.exceptionThrown')errors.push(msg.params?.exceptionDetails?.text);
+    const p=pending.get(msg.id);if(!p)return;pending.delete(msg.id);
+    msg.error?p.reject(Error(msg.error.message)):p.resolve(msg.result);
+  });
+  const call=(method,params={})=>new Promise((resolve,reject)=>{
+    const id=++seq;pending.set(id,{resolve,reject});
+    socket.send(JSON.stringify({id,method,params}));
+  });
+  const run=async expression=>{
+    const res=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});
+    if(res.exceptionDetails)throw Error(res.exceptionDetails.exception?.description||res.exceptionDetails.text);
+    return res.result.value;
+  };
+  await call('Page.enable');await call('Runtime.enable');
+  return {socket,call,run,errors};
+}
+const fixture=String.raw`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{margin:0;font:14px system-ui}main{width:75%;margin:30px auto}
+#messages article{padding:18px;border-bottom:1px solid #ccc}
+form{position:sticky;bottom:0;background:white;padding:14px}
+</style></head><body><aside>原侧边栏</aside><main>
+<div id="messages"></div><form id="composer">
+<textarea aria-label="输入框"></textarea><button>发送</button></form></main>
+<script>
+for(let i=0;i<90;i++){
+const row=document.createElement('article');
+row.setAttribute('data-testid','conversation-turn-'+i);
+row.setAttribute('data-message-author-role',i%2?'assistant':'user');
+row.textContent='第 '+i+' 条消息：'+('不同长度的历史对话内容。'.repeat(i%9+1));
+document.querySelector('#messages').append(row);
+}
+document.querySelector('#messages').firstElementChild['__reactFiber$example']={tag:5,type:'div',return:null};
+</script><script src="/bridge.js"></script></body></html>`;
+test('real Chromium bridge: native preview, reversible takeover, route guard', {timeout:60000}, async t=>{
+  const binary=process.env.CHROME_BIN||'chromium';
+  if(spawnSync(binary,['--version'],{stdio:'ignore'}).status!==0)
+    return t.skip('Chromium unavailable');
+  const source=await readFile(new URL('../chatgpt-native-render-bridge.user.js',import.meta.url),'utf8');
+  const server=createServer((req,res)=>{
+    if(req.url==='/bridge.js'){
+      res.setHeader('Content-Type','text/javascript');
+      res.end(source);
+    }else{
+      res.setHeader('Content-Type','text/html; charset=utf-8');
+      res.end(fixture);
+    }
+  });
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  const profile=await mkdtemp(join(tmpdir(),'bridge-lab-'));
+  let proc,client;
+  try{
+    proc=spawn(binary,['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',
+      '--remote-allow-origins=*','--remote-debugging-port=0',
+      '--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
+    const port=await until(async()=>Number((await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]));
+    client=await cdp(port);
+    await client.call('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/c/test'});
+    await until(()=>client.run('!!window.ChatGPTRenderLiteBridge'));
+    assert.equal(await client.run('ChatGPTRenderLiteBridge.status().mode'),'off');
+    assert.equal(await client.run("document.querySelectorAll('[data-rl-native-bridge]').length"),0);
+    const probe=await client.run('ChatGPTRenderLiteBridge.probe()');
+    assert.equal(probe.counts['[data-testid^="conversation-turn-"]'],90);
+    const fiber=await client.run('ChatGPTRenderLiteBridge.fiberProbe()');
+    assert.equal(fiber.samples[0].found,true);
+    let result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.mode,'preview');
+    assert.equal(result.messages,90);
+    assert.ok(result.mounted<40);
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
+    assert.equal(await client.run("document.querySelector('#composer textarea').isConnected"),true);
+    await client.run("document.querySelector('#messages').lastElementChild.textContent='新回复 <script>not executed</script>'");
+    await new Promise(r=>setTimeout(r,950));
+    await until(()=>client.run("document.querySelector('[data-rl-native-bridge]')?.shadowRoot.textContent.includes('新回复')"));
+    assert.equal(await client.run("document.querySelector('[data-rl-native-bridge]').shadowRoot.querySelectorAll('script').length"),0);
+    await client.run('window.confirm=()=>true');
+    result=await client.run("ChatGPTRenderLiteBridge.start('takeover')");
+    assert.equal(result.mode,'takeover');
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'none');
+    assert.equal(await client.run("document.querySelectorAll('#messages article').length"),90); // Original React-owned nodes remain
+    assert.equal(await client.run("document.querySelector('#composer textarea').isConnected"),true);
+    await client.run("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
+    assert.equal(await client.run('ChatGPTRenderLiteBridge.status().mode'),'off');
+    // Regression from real-page v0.2.0 diagnostic: a root with just two
+    // styled branches is not a reliable chat message container.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      root.replaceChildren();
+      for(let i=0;i<2;i++){
+        const region=document.createElement('div');
+        const prose=document.createElement('div');
+        prose.className='prose';prose.textContent='布局区域 '+i;
+        region.append(prose);root.append(region);
+      }
+    })()`);
+    const falsePositive=await client.run('ChatGPTRenderLiteBridge.probe()');
+    assert.equal(falsePositive.counts['[data-testid^="conversation-turn-"]'],0);
+    assert.equal(falsePositive.containers[0].candidate,null);
+    const structure=await client.run('ChatGPTRenderLiteBridge.structure()');
+    assert.equal(structure.version,'0.4.0');
+    assert.ok(structure.reports.length>0);
+    assert.ok(structure.reports[0].branches.some(b=>b.childCount===2));
+    assert.ok(!JSON.stringify(structure).includes('布局区域'), 'report must not return text');
+    await assert.rejects(
+      client.run("ChatGPTRenderLiteBridge.start('takeover')"),
+      /找不到安全的消息区域|至少需要 5 个/
+    );
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
+    assert.equal(await client.run("document.querySelector('[data-rl-native-bridge]')===null"),true);
+
+    // The real 2026 ChatGPT page uses data-rail-chat-transcript and
+    // data-turn-key, with nested data-dil-message-id/data-response-body.
+    // A partial mounted subset must be previewable but never taken over.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      root.replaceChildren();
+      const transcript=document.createElement('div');
+      transcript.setAttribute('data-rail-chat-transcript','');
+      for(let i=0;i<6;i++){
+        const turn=document.createElement('div');
+        turn.setAttribute('data-turn-key','turn-'+i);
+        const state=document.createElement('div');
+        state.setAttribute('data-talvt-turn-state','');
+        const response=document.createElement('div');
+        response.setAttribute('data-response-body','');
+        const dil=document.createElement('div');
+        dil.setAttribute('data-dil-message-id','private-'+i);
+        dil.textContent='DIL text '+i;
+        response.append(dil);state.append(response);turn.append(state);
+        transcript.append(turn);
+      }
+      root.append(transcript);
+    })()`);
+    const detected=await client.run('ChatGPTRenderLiteBridge.nativeOverview()');
+    assert.equal(detected.version,'0.4.0');
+    assert.equal(detected.transcriptCount,1);
+    assert.equal(detected.mountedTurnCount,6);
+    assert.equal(detected.dilMessageCount,6);
+    assert.equal(detected.turnStateMarkers,6);
+    assert.ok(!JSON.stringify(detected).includes('private-'));
+    const monitor=await client.run(`(async()=>{
+      const pending=ChatGPTRenderLiteBridge.monitorTurns(1200);
+      setTimeout(()=>{
+        const root=document.querySelector('[data-rail-chat-transcript]');
+        root.firstElementChild.remove();
+        const fresh=document.createElement('div');
+        fresh.setAttribute('data-turn-key','turn-7');
+        fresh.textContent='new text';
+        root.append(fresh);
+      },500);
+      return await pending;
+    })()`);
+    assert.equal(monitor.reason,'completed');
+    assert.equal(monitor.minMounted,6);
+    assert.equal(monitor.maxMounted,6);
+    assert.ok(monitor.uniqueTurnKeys>=7,'must report key turnover without outputting values');
+    assert.ok(!JSON.stringify(monitor).includes('turn-7'));
+    result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.selector,'native-turns');
+    assert.equal(result.messages,6);
+    await assert.rejects(client.run("ChatGPTRenderLiteBridge.start('takeover')"),
+      /DIL transcript|拒绝 takeover/);
+    assert.equal(await client.run("document.querySelector('[data-rail-chat-transcript]').style.display"),'');
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+
+    // Regression: newer ChatGPT markup may use no legacy test IDs, role
+    // attributes or article tags. Detect repeated div rows via prose bodies.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      root.replaceChildren();
+      for(let i=0;i<55;i++){
+        const row=document.createElement('div');
+        row.className='opaque-turn-wrapper';
+        const body=document.createElement('div');
+        body.className='prose';
+        body.textContent='历史消息 ' + i + '：' + ('内容片段 '.repeat(20));
+        row.append(body);
+        root.append(row);
+      }
+    })()`);
+    const newer=await client.run('ChatGPTRenderLiteBridge.probe()');
+    assert.equal(newer.counts['[data-testid^="conversation-turn-"]'],0);
+    assert.equal(newer.counts['main article'],0);
+    assert.equal(newer.anchors['.prose'],55);
+    assert.equal(newer.containers[0].candidate.rows,55);
+    result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.mode,'preview');
+    assert.equal(result.messages,55);
+    assert.equal(result.selector,'inferred');
+    assert.equal(await client.run("document.querySelector('#messages').style.display"),'');
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+
+    // Click picker must work without class hints and must not hide the original.
+    await client.run(`(() => {
+      const root=document.querySelector('#messages');
+      [...root.children].forEach(row=>row.firstElementChild.removeAttribute('class'));
+      ChatGPTRenderLiteBridge.pick();
+      root.children[8].firstElementChild.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+    })()`);
+    result=await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    assert.equal(result.selector,'picked');
+    assert.equal(result.messages,55);
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+    await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    // The short-lived global getBoundingClientRect wrapper must return native
+    // DOMRects and restore the exact original prototype method in Chromium.
+    const geometrySource=await readFile(new URL('../chatgpt-geometry-target-probe.user.js',import.meta.url),'utf8');
+    await client.run(geometrySource);
+    const beforeProbe=await client.run(`(() => {
+      window.__originalGeometryForTest=Element.prototype.getBoundingClientRect;
+      const started=ChatGPTRenderLiteGeometryProbe.capture(1200);
+      const node=document.querySelector('#messages');
+      const rect=node.getBoundingClientRect();
+      document.dispatchEvent(new Event('scrollend',{bubbles:true}));
+      node.firstElementChild.getBoundingClientRect();
+      return {active:started.active,width:rect.width,wrapped:Element.prototype.getBoundingClientRect!==window.__originalGeometryForTest};
+    })()`);
+    assert.equal(beforeProbe.active,true);
+    assert.equal(beforeProbe.wrapped,true);
+    assert.ok(beforeProbe.width>0);
+    await until(()=>client.run("ChatGPTRenderLiteGeometryProbe.status().lastReason==='completed'"),4000);
+    const afterProbe=await client.run(`({
+      restored:Element.prototype.getBoundingClientRect===window.__originalGeometryForTest,
+      calls:ChatGPTRenderLiteGeometryProbe.status().last.calls,
+      scrollend:ChatGPTRenderLiteGeometryProbe.status().last.scrollendEvents,
+      groupCount:ChatGPTRenderLiteGeometryProbe.status().last.groups.length
+    })`);
+    assert.equal(afterProbe.restored,true);
+    assert.ok(afterProbe.calls>=2);
+    assert.ok(afterProbe.scrollend>=1);
+    assert.ok(afterProbe.groupCount>=1);
+    // Phase 6.3: containment is fully default-off, checks scroll stability,
+    // changes only offscreen text blocks, and restores styles immediately.
+    await client.run("ChatGPTRenderLiteBridge.restore()");
+    const containmentSource=await readFile(new URL('../chatgpt-dil-containment-lab.user.js',import.meta.url),'utf8');
+    await client.run(containmentSource);
+    const inactive=await client.run("ChatGPTRenderLiteDILContainment.status()");
+    assert.equal(inactive.active,false);
+    assert.equal(inactive.appliedBlocks,0);
+    await client.run(`(() => {
+      const old=document.querySelector('#messages');
+      old.replaceChildren();
+      old.style.cssText='height:540px;overflow-y:auto';
+      old.setAttribute('data-thread-frame-scrollbar','');
+      const transcript=document.createElement('div');
+      transcript.setAttribute('data-rail-chat-transcript','');
+      const turn=document.createElement('div');
+      turn.setAttribute('data-turn-key','long-turn');
+      const response=document.createElement('div');
+      response.setAttribute('data-dil-response','');
+      for(let i=0;i<40;i++){
+        const p=document.createElement('p');
+        p.style.cssText='font:16px/1.5 sans-serif;white-space:normal;margin:10px 0';
+        p.textContent='长消息块 ' + i + '，内容足够长以进行布局测量。'.repeat(35);
+        response.append(p);
+      }
+      turn.append(response);transcript.append(turn);old.append(transcript);
+    })()`);
+    const containmentStarted=await client.run('ChatGPTRenderLiteDILContainment.enable()');
+    assert.equal(containmentStarted.active,true);
+    assert.equal(containmentStarted.pending,false,'resolved enable() must not report pending:true');
+    assert.equal(containmentStarted.version,'0.1.1');
+    assert.ok(containmentStarted.appliedBlocks>=4,
+      'offscreen DIL paragraphs should be containable');
+    assert.ok(Math.abs(containmentStarted.afterHeight-containmentStarted.beforeHeight)<=
+      Math.max(80,containmentStarted.beforeHeight*.01));
+    const appliedStyleCount=await client.run(
+      "document.querySelectorAll('[data-dil-response] > p[style*=\"content-visibility\"]').length"
+    );
+    assert.ok(appliedStyleCount>=4);
+    const containmentStopped=await client.run("ChatGPTRenderLiteDILContainment.disable()");
+    assert.equal(containmentStopped.active,false);
+    assert.equal(containmentStopped.appliedBlocks,0);
+    assert.ok(containmentStopped.restored>=4);
+    assert.equal(await client.run(
+      "[...document.querySelectorAll('[data-dil-response] > p')].some(p=>p.style.contentVisibility==='auto')"
+    ),false);
+    await client.run("ChatGPTRenderLiteBridge.start('preview')");
+    await client.run("history.pushState({},'','/c/new-conversation')");
+    await until(()=>client.run("ChatGPTRenderLiteBridge.status().mode==='off'"),6000);
+    assert.deepEqual(client.errors,[]);
+  }finally{
+    try{client?.socket.close();}catch{}
+    proc?.kill('SIGKILL');
+    await new Promise(r=>server.close(r));
+    await rm(profile,{recursive:true,force:true,maxRetries:3,retryDelay:90});
+  }
+});

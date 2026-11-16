@@ -20,5 +20,6 @@ jobs:
         run: |
           node --check chatgpt-render-lite.user.js
           node --check chatgpt-geometry-cache.user.js
+          node --check chatgpt-native-render-bridge.user.js
       - name: Unit tests
-        run: node --test tests/*.test.cjs
+        run: node --test tests/*.test.cjs tests/*.browser.test.mjs
