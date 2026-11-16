@@ -593,7 +593,16 @@ function status(){return {version:'0.2.0',mode:state.mode,selector:state.source?
  reactFiberMarker:state.source?Object.keys(state.source.nodes[0]||{}).some(k=>k.startsWith('__reactFiber$')):null};}
 function probe(){
   const counts={};for(const selector of selectors)counts[selector]=nodesFor(selector).length;
-  return {counts,route:conversationRoute()?'conversation':'other',version:'0.1.0'};
+  const anchors={};
+  for(const selector of contentSelectors)anchors[selector]=document.querySelectorAll('main '+selector+',[role="main"] '+selector).length;
+  const containers=[...document.querySelectorAll('main,[role="main"]')].map((main,index)=>{
+    const found=structuralCandidates(main);
+    const first=found[0];
+    return {index,elementCount:main.querySelectorAll('*').length,
+      candidate:first?{rows:first.count,matchedBranches:first.hits}:null};
+  });
+  return {counts,anchors,containers,mainCount:containers.length,iframeCount:document.querySelectorAll('iframe').length,
+    route:conversationRoute()?'conversation':'other',version:'0.2.0',note:'匿名结构信息，不含消息文本'};
 }
 function fiberProbe(){
   const s=state.source||discover(),samples=[];
@@ -609,6 +618,37 @@ function fiberProbe(){
   }
   return {selector:s.selector,samples};
 }
+// Interactive fallback when ChatGPT changes all message selectors.
+function stopPicker(){
+  const p=state.picker;if(!p)return;
+  document.removeEventListener('click',p.click,true);
+  document.removeEventListener('keydown',p.keydown,true);
+  p.banner.remove();state.picker=null;
+}
+function pick(){
+  if(state.mode!=='off')throw Error('请先恢复原页面');
+  stopPicker();
+  const banner=bridgeElement('div','点击一条历史聊天消息，选择候选消息区域。Esc 取消，不会隐藏或上传任何内容。');
+  banner.setAttribute('data-rl-picker','');
+  banner.style.cssText='position:fixed;z-index:2147483647;top:12px;left:50%;transform:translateX(-50%);background:#1e4e43;color:#fff;padding:10px 18px;border-radius:10px;pointer-events:none;font:13px system-ui';
+  document.body.append(banner);
+  const click=e=>{
+    if(!(e.target instanceof HTMLElement)||!findMain(e.target))return;
+    e.preventDefault();e.stopImmediatePropagation();
+    try{
+      const root=manualCandidate(e.target),source=sourceFromRoot(root,'picked');
+      state.manualRoot=root;state.manualPath=location.pathname;state.lastError=null;
+      console.info('[RL Bridge] 已定位候选消息区域',{rows:source.nodes.length,rootTag:root.localName,
+        note:'请先运行预览确认消息完整，再考虑隐藏原列表'});
+    }catch(error){state.lastError=err(error);console.warn('[RL Bridge]',state.lastError);}
+    stopPicker();
+  };
+  const keydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();stopPicker();}};
+  state.picker={banner,click,keydown};
+  document.addEventListener('click',click,true);
+  document.addEventListener('keydown',keydown,true);
+  return {mode:'pick',note:'点击历史消息完成选取，Esc 取消'};
+}
 function setSelector(selector){
   if(state.mode!=='off')throw Error('请先恢复原版');
   if(selector!==null&&(typeof selector!=='string'||selector.length>240))throw TypeError('无效 CSS 选择器');
@@ -618,6 +658,7 @@ function setSelector(selector){
 function menu(label,fn){if(typeof GM_registerMenuCommand==='function')GM_registerMenuCommand(label,fn);}
 function safe(fn){return()=>{try{console.info('[RL Bridge]',fn());}catch(e){state.lastError=err(e);console.warn('[RL Bridge]',err(e));}};}
 menu('Phase6：扫描页面结构',safe(probe));
+menu('Phase6：点击消息定位容器',safe(pick));
 menu('Phase6：只读 React 组件路径',safe(fiberProbe));
 menu('Phase6：预览轻量渲染器',safe(()=>start('preview')));
 menu('Phase6：实验性隐藏原消息区域',safe(()=>start('takeover')));
@@ -626,6 +667,6 @@ menu('Phase6：设置消息 CSS 选择器',safe(()=>{
   const value=window.prompt('输入匹配每条消息的 CSS 选择器；留空恢复自动识别',state.selector||'');
   return value===null?status():setSelector(value.trim()||null);
 }));
-page.ChatGPTRenderLiteBridge=Object.freeze({probe,fiberProbe,start,restore,status,setSelector});
+page.ChatGPTRenderLiteBridge=Object.freeze({probe,fiberProbe,pick,start,restore,status,setSelector});
 
 })();
