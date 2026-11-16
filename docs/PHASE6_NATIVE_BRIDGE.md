@@ -186,6 +186,12 @@ Chrome/MDN 明确指出 `content-visibility:auto` 配合 `contain-intrinsic-size
 - <https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/content-visibility>
 - <https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/contain-intrinsic-block-size>
 
+### v0.1.1 状态时序修正
+
+用户首次在真实 ChatGPT 页面启用时，返回 `active:true`、`pending:true`、`appliedBlocks:7`、`beforeHeight:11711`、`afterHeight:11711`。这表示 7 个文本块已成功应用且页面总体 scrollHeight **初始变化为 0px**。但 `pending:true` 是 `enable()` 在 `finally` 清除 pending 前过早构造返回状态快照导致的报告错误，而不是有第二轮优化仍在等待。v0.1.1 改为完成清理后才返回最终状态，并在 Chromium E2E 中断言 `pending:false`。
+
+此结果**不等于真实流畅度改善**。需进一步录制关闭探针的原生 Performance Trace 对照；仅当前时刻 scrollHeight 相同也不能保证滚动过程中绝不跳变。
+
 ### 使用与对照
 
 1. **关闭旧 Render Lite 优化、Phase 4 Geometry Cache 和 Phase 6.2 Geometry Probe**；保持 v0.4.0 Bridge 为 off。打开同一条长对话。
