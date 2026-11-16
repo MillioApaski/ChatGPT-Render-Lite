@@ -41,8 +41,14 @@
     if (!value || typeof value !== 'string') return '';
     try {
       const u = new URL(value, location.origin);
-      return u.protocol === 'https:' || u.protocol === 'http:'
-        ? u.origin + u.pathname.slice(0, 180) : '';
+      if (!['https:', 'http:'].includes(u.protocol)) return '';
+      if (u.origin === location.origin) {
+        return u.pathname.startsWith('/cdn/assets/') ||
+          u.pathname.startsWith('/cdn/async/')
+          ? u.origin + u.pathname.slice(0, 180)
+          : '(chatgpt non-asset script)';
+      }
+      return u.origin + '/(third-party script)';
     } catch {
       return '';
     }
